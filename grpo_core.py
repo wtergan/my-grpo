@@ -13,7 +13,6 @@ from torch.nn import functional as F
 # 1. Batch Generation
 # ================================================================================
 
-@torch.inference_mode()
 def generate_completions(
     model: PreTrainedModel,
     tokenizer: PreTrainedTokenizerBase,

@@ -19,7 +19,7 @@ def test_group_rewards_normalization():
     rewards = torch.tensor([1., 0., 0., 1.])
     adv = group_rewards_normalization(rewards, 2)
     assert torch.isclose(adv.mean(), torch.tensor(0.0), atol=1e-6)
-    assert torch.isclose(adv.std(), torch.tensor(1.0), atol=1e-6)
+    assert torch.isclose(adv.std(unbiased=False), torch.tensor(1.0), atol=1e-6)
     print("✅ group_rewards_normalization zero mean/unit std OK")
 
 def test_token_policy_loss_requires_grad():
