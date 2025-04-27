@@ -77,7 +77,8 @@ def group_rewards_normalization(
     n_prompts = rewards.numel() // group_size
     rewards = rewards.view(n_prompts, group_size)
     means = rewards.mean(dim=1, keepdim=True)
-    stds = rewards.std(dim=1, keepdim=True).clamp_min(eps)
+    # Use unbiased=False for unit variance (uses n for population, not n-1 for sample).
+    stds = rewards.std(dim=1, keepdim=True, unbiased=False).clamp_min(eps)
     advantages = (rewards - means) / stds
     return advantages.view(-1)
 
@@ -120,8 +121,15 @@ def token_policy_loss(
     comp_targets = input_ids[:, prompt_len:]                 # (batch, completion_len)
     # Gather log-probabilities for the target tokens:
     token_logp = comp_log_probs.gather(-1, comp_targets.unsqueeze(-1)).squeeze(-1)  # (batch, completion_len)
-    # Mask padding tokens:
-    comp_mask = (comp_targets != model.config.pad_token_id).float()                 # (batch, completion_len)
+    # Padding-mask: fall back to eos if model has no explicit pad token
+    pad_id = (model.config.pad_token_id
+              if model.config.pad_token_id is not None
+              else getattr(model.config, "eos_token_id", None))
+    if pad_id is None:
+        # last resort: assume every token is valid
+        comp_mask = torch.ones_like(comp_targets, dtype=torch.float)
+    else:
+        comp_mask = comp_targets.ne(pad_id).float()  # (batch, completion_len)
     # Broadcast advantages:
     adv_broadcast = advantages.unsqueeze(1) * comp_mask     # (batch, completion_len)
     # Compute the loss:
