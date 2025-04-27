@@ -1,7 +1,7 @@
-Toy-level re-implementation of **Group Relative Policy Optimization** for language model post-training.
+My own implementation of **Group Relative Policy Optimization** for language model post-training.
 
 ## Why?
-To grok RL-finetune internals without the scaffolding (Ray, RLHF pipelines, etc.).
+To grok RL-finetune internals for educational purposes.s
 
 ## Project structure:
 grpo_core.py      # GRPO math: generation, reward-norm, loss.
