@@ -36,7 +36,7 @@ def test_gsm8k_extraction():
 
 # Test prompt and target extraction:
 def test_prompt_and_target_extraction():
-    ds, _ = du.load_task_dataset("gsm8k", split="test[:1]", cache_dir="/tmp")
+    ds, _ = du.load_task_dataset("gsm8k", split="test[:1]")
     prompts = du.build_prompts(ds, "gsm8k")
     targets = du.target_extraction(ds, "gsm8k")
     assert len(prompts) == len(ds)
