@@ -6,19 +6,18 @@ import pytest
 import data_utils as du
 import torch
 
+# ===============================================================================
+# DATASET LOADING TESTS
+# ===============================================================================
 # Test dataset loading (only check function runs and returns non-empty for small split):
 def test_gsm8k_load():
     # Use a small split to avoid heavy resource use:
     train, val = du.load_task_dataset("gsm8k", split="train", val_fraction=0.01)  # 1% val
     assert len(train) > 0 and len(val) > 0
 
-# Test reward computation logic:ß
-def test_binary_reward():
-    preds  = ["42", "13"]
-    target = ["42", "12"]
-    r = du.compute_binary_reward(preds, target, "gsm8k")
-    assert torch.allclose(r, torch.tensor([1.0, 0.0], dtype=torch.float32))
-
+# ===============================================================================
+# PROMPT/EXTRACTION TESTS
+# ===============================================================================
 # Test prompt building:
 def test_prompt_building():
     # Fake dataset example:
@@ -34,6 +33,25 @@ def test_gsm8k_extraction():
     text = "Natalia sold 48/2 = <<48/2=24>>24 clips in May. #### 72"
     answer = du.gsm8k_extraction(text)
     assert answer == "72"
+
+# Test prompt and target extraction:
+def test_prompt_and_target_extraction():
+    ds, _ = du.load_task_dataset("gsm8k", split="test[:1]", cache_dir="/tmp")
+    prompts = du.build_prompts(ds, "gsm8k")
+    targets = du.target_extraction(ds, "gsm8k")
+    assert len(prompts) == len(ds)
+    assert len(targets) == len(ds)
+    print("✅ prompt and target extraction lengths OK")
+
+# ===============================================================================
+# REWARD COMPUTATION TESTS
+# ===============================================================================
+# Test reward computation logic:ß
+def test_binary_reward():
+    preds  = ["42", "13"]
+    target = ["42", "12"]
+    r = du.compute_binary_reward(preds, target, "gsm8k")
+    assert torch.allclose(r, torch.tensor([1.0, 0.0], dtype=torch.float32))
 
 if __name__ == "__main__":
     pytest.main([__file__])
