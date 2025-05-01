@@ -18,7 +18,7 @@ def test_generate_completions_shapes():
     batch = generate_completions(model, tok, prompts, num_generations=2, max_new_tokens=2, device="cpu")
     assert batch["input_ids"].shape[0] == 4  # N*M
     assert batch["attention_mask"].shape == batch["input_ids"].shape
-    print("✅ generate_completions shapes OK")
+    print("generate_completions shapes OK")
 
 # ===============================================================================
 # TEST: group_rewards_normalization
@@ -40,7 +40,7 @@ def test_token_policy_loss_requires_grad():
     adv = group_rewards_normalization(rewards, 2)
     loss = token_policy_loss(model, batch, adv)
     assert loss.requires_grad
-    print("✅ token_policy_loss requires_grad OK")
+    print("token_policy_loss requires_grad OK")
 
 # ===============================================================================
 # TEST: grpo_step
@@ -58,7 +58,7 @@ def test_grpo_step_basic():
     assert isinstance(loss, torch.Tensor)
     assert "raw_reward_mean" in diagnostics
     assert "adv_std" in diagnostics
-    print("✅ grpo_step basic OK")
+    print("grpo_step basic OK")
 
 if __name__ == "__main__":
     test_generate_completions_shapes()
