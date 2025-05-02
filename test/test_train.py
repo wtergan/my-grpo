@@ -1,3 +1,6 @@
+# ===============================================================================
+# IMPORTS AND SETUP
+# ===============================================================================
 import sys, tempfile, types, os
 from pathlib import Path
 
@@ -27,7 +30,7 @@ def stub_load_task_dataset(task, *_, **__):
     return ds, ds                      # train_ds, val_ds
 
 # ===============================================================================
-# SMOKE TEST AND BASIC FUNCTIONALITY
+# SMOKE TESTS AND BASIC FUNCTIONALITY
 # ===============================================================================
 @pytest.mark.timeout(60)
 def test_train_loop_cpu(monkeypatch):
@@ -70,7 +73,7 @@ def test_train_loop_cpu(monkeypatch):
         # Not implemented unless train.py is modified to expose loss value
 
 # ===============================================================================
-# ARGUMENT PARSER SANITY CHECKS
+# ARGUMENT PARSER SANITY TESTS
 # ===============================================================================
 def test_argparse_defaults():
     parser = train.build_argparser()
@@ -85,11 +88,13 @@ def test_argparse_defaults():
 # ===============================================================================
 # EDGE CASES: EMPTY AND SINGLE SAMPLE DATASETS
 # ===============================================================================
+# Test training with empty dataset:
 def stub_empty_dataset(*args, **kwargs):
     from datasets import Dataset
     ds = Dataset.from_list([])
     return ds, ds
 
+# Test training with empty dataset:
 def test_train_with_empty_dataset(monkeypatch):
     monkeypatch.setattr(du, "load_task_dataset", stub_empty_dataset)
     monkeypatch.setattr(train, "SummaryWriter", DummyTB)
@@ -113,11 +118,13 @@ def test_train_with_empty_dataset(monkeypatch):
         else:
             pytest.fail("Expected failure on empty dataset, but training completed.")
 
+# Test training with single sample dataset:
 def stub_single_sample_dataset(*args, **kwargs):
     from datasets import Dataset
     ds = Dataset.from_list([{"question": "What is 1+1?", "answer": "2"}])
     return ds, ds
 
+# Test training with single sample dataset:
 def test_train_with_single_sample(monkeypatch):
     monkeypatch.setattr(du, "load_task_dataset", stub_single_sample_dataset)
     monkeypatch.setattr(train, "SummaryWriter", DummyTB)
@@ -137,3 +144,46 @@ def test_train_with_single_sample(monkeypatch):
         train.main()
         ckpts = list(Path(tmpdir).glob("model_step_2.pt"))
         assert ckpts, "checkpoint file not found for single sample run"
+
+# ===============================================================================
+# PG/KL TRAINING LOOP TEST
+# ===============================================================================
+# Test training with PG vs KL:
+def test_train_loop_pg_vs_kl(monkeypatch):
+    monkeypatch.setattr(du, "load_task_dataset", stub_load_task_dataset)
+    monkeypatch.setattr(train, "SummaryWriter", DummyTB)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # PG mode
+        cli_pg = [
+            "train.py",
+            "--model_name", "hf-internal-testing/tiny-random-gpt2",
+            "--device", "cpu",
+            "--steps", "2",
+            "--batch_n", "2",
+            "--gens_m", "1",
+            "--eval_every", "2",
+            "--save_dir", tmpdir,
+            "--kl_beta", "0.0"
+        ]
+        monkeypatch.setattr(sys, "argv", cli_pg)
+        train.main()
+        ckpts_pg = list(Path(tmpdir).glob("model_step_2.pt"))
+        assert ckpts_pg, "PG checkpoint file not found"
+        # KL mode
+        cli_kl = [
+            "train.py",
+            "--model_name", "hf-internal-testing/tiny-random-gpt2",
+            "--device", "cpu",
+            "--steps", "2",
+            "--batch_n", "2",
+            "--gens_m", "1",
+            "--eval_every", "2",
+            "--save_dir", tmpdir,
+            "--kl_beta", "0.5",
+            "--kl_epsilon", "0.2"
+        ]
+        monkeypatch.setattr(sys, "argv", cli_kl)
+        train.main()
+        ckpts_kl = list(Path(tmpdir).glob("model_step_2.pt"))
+        assert ckpts_kl, "KL checkpoint file not found"
+    print("test_train_loop_pg_vs_kl OK")

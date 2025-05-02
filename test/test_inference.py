@@ -1,3 +1,6 @@
+# ===============================================================================
+# IMPORTS AND SETUP
+# ===============================================================================
 import subprocess, sys, textwrap
 import pytest
 
@@ -67,4 +70,43 @@ def test_batch_mode(tmp_path, monkeypatch):
             })()
         })()
     )
+    T.main()
+
+# ===============================================================================
+# EDGE CASES AND ERROR HANDLING TESTS
+# ===============================================================================
+# Test: Batch mode with missing prompts file (should raise FileNotFoundError or similar)
+def test_batch_mode_missing_file(tmp_path, monkeypatch):
+    import inference as T
+    prompts_file = tmp_path / "does_not_exist.txt"
+    # Patch generate, load_model, build_parser as above
+    monkeypatch.setattr(T, 'generate', lambda *a, **kw: "dummy")
+    monkeypatch.setattr(T, 'load_model', lambda *a, **kw: (None, None))
+    monkeypatch.setattr(
+        T, 'build_parser',
+        lambda: type('P', (), {
+            'parse_args': lambda *a, **kw: type('A', (), {
+                'model_name': '', 'ckpt': None, 'device': 'cpu', 'prompts': str(prompts_file), 'task': '', 'out': None, 'max_new_tokens': 10, 'targets': None
+            })()
+        })()
+    )
+    with pytest.raises((FileNotFoundError, OSError, IOError)):
+        T.main()
+
+# Test: Batch mode with empty prompts file (should not crash)
+def test_batch_mode_empty_file(tmp_path, monkeypatch):
+    import inference as T
+    prompts_file = tmp_path / "empty.txt"
+    prompts_file.write_text("")
+    monkeypatch.setattr(T, 'generate', lambda *a, **kw: "dummy")
+    monkeypatch.setattr(T, 'load_model', lambda *a, **kw: (None, None))
+    monkeypatch.setattr(
+        T, 'build_parser',
+        lambda: type('P', (), {
+            'parse_args': lambda *a, **kw: type('A', (), {
+                'model_name': '', 'ckpt': None, 'device': 'cpu', 'prompts': str(prompts_file), 'task': '', 'out': None, 'max_new_tokens': 10, 'targets': None
+            })()
+        })()
+    )
+    # Should not raise
     T.main()

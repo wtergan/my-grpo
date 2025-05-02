@@ -1,3 +1,6 @@
+# ===============================================================================
+# IMPORTS AND SETUP
+# ===============================================================================
 import sys
 from pathlib import Path
 sys.path.append(str(Path(__file__).parent.parent))
@@ -16,7 +19,7 @@ def test_gsm8k_load():
     assert len(train) > 0 and len(val) > 0
 
 # ===============================================================================
-# PROMPT/EXTRACTION TESTS
+# PROMPT BUILDING AND EXTRACTION TESTS
 # ===============================================================================
 # Test prompt building:
 def test_prompt_building():
@@ -41,12 +44,12 @@ def test_prompt_and_target_extraction():
     targets = du.target_extraction(ds, "gsm8k")
     assert len(prompts) == len(ds)
     assert len(targets) == len(ds)
-    print("✅ prompt and target extraction lengths OK")
+    print("prompt and target extraction lengths OK")
 
 # ===============================================================================
 # REWARD COMPUTATION TESTS
 # ===============================================================================
-# Test reward computation logic:ß
+# Test reward computation logic:
 def test_binary_reward():
     preds  = ["42", "13"]
     target = ["42", "12"]

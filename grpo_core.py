@@ -13,6 +13,17 @@ from torch.nn import functional as F
 # BATCH GENERATION
 # ===============================================================================
 
+def compute_log_probs(model, input_ids, attention_mask, prompt_len):
+    """Returns log-probs for completions (tokens after prompt) for each sequence in batch."""
+    with torch.no_grad():
+        outputs = model(input_ids=input_ids, attention_mask=attention_mask)
+        logits = outputs.logits  # (batch, seq_len, vocab)
+        log_probs = F.log_softmax(logits, dim=-1)
+        comp_targets = input_ids[:, prompt_len:]
+        comp_log_probs = log_probs[:, prompt_len - 1 : -1, :] # TEACHER FORCING
+        old_log_probs = comp_log_probs.gather(-1, comp_targets.unsqueeze(-1)).squeeze(-1)
+    return old_log_probs
+
 def generate_completions(
     model: PreTrainedModel,
     tokenizer: PreTrainedTokenizerBase,
@@ -20,6 +31,7 @@ def generate_completions(
     num_generations: int = 4,
     max_new_tokens: int = 64,
     device: torch.device | str = "cuda",
+    compute_old_log_probs: bool = False,
     **gen_kwargs,
 ) -> Dict[str, torch.Tensor]:
     """
@@ -28,35 +40,35 @@ def generate_completions(
     Returns a dict with: 
         - input_ids (batch, seq_len_prompt+completion).
         - attention_mask (batch, seq_len_prompt+completion) of ones.
-        - prompt_lens (len(prompt_i) for masking later).
+        - prompt_len (len(prompt_i) for masking later).
         - num_generations.
+        - old_log_probs (log-probs for completions under current model, if requested).
     """
-    # Batch and repeat prompts:
     repeated_prompts: List[str] = sum([[p] * num_generations for p in prompts], [])
-    # Tokenize the list of repeated prompts:
     enc = tokenizer(
         repeated_prompts,
         return_tensors="pt",
         padding=True,
         truncation=True,        
     ).to(device)
-    # Generate completions:
     gen_tokens = model.generate(
         **enc,
         max_new_tokens=max_new_tokens,
         pad_token_id=tokenizer.eos_token_id,
         **gen_kwargs,
     )
-    # Output preparation: 
     prompt_length = enc["input_ids"].shape[1]
     full_ids = gen_tokens
     attn_mask = torch.ones_like(full_ids, dtype=torch.long)
-    return dict(
+    batch = dict(
         input_ids=full_ids,
         attention_mask=attn_mask,
         prompt_len=prompt_length,
         num_generations=num_generations,
     )
+    if compute_old_log_probs:
+        batch["old_log_probs"] = compute_log_probs(model, full_ids, attn_mask, prompt_length)
+    return batch
 
 # ===============================================================================
 # REWARD NORMALIZATION
@@ -83,58 +95,79 @@ def group_rewards_normalization(
     return advantages.view(-1)
 
 # ===============================================================================
-# TOKEN-LEVEL POLICY LOSS
+# TOKEN-LEVEL POLICY LOSS: Simple PG OR PG w/KL Divergence+Reference.
 # ===============================================================================
 
 def token_policy_loss(
     model: PreTrainedModel,
     batch: Dict[str, torch.Tensor],
     advantages: torch.Tensor,
+    old_log_probs: torch.Tensor = None,  
+    ref_model=None,
+    kl_beta=0.0,
+    kl_epsilon=0.2,  
 ) -> torch.Tensor:
     """
-    Takes the batch of generated completions and computed advantages, and returns
-    the token-level policy gradient loss.
-    batch: dict of (input_ids, attention_mask, prompt_len, num_generations)
-    advantages: (N*group_size)
-    scalar loss tensor (requires_grad)
+    Computes the token-level policy gradient loss.
+    Supports both simple PG and PPO-style GRPO with KL+reference.
+    Args:
+        model: The current model.
+        batch: dict with keys input_ids, attention_mask, prompt_len.
+        advantages: (N*group_size).
+        old_log_probs: The log-probs from the model at rollout (for PPO ratio).
+        ref_model: Reference model for KL penalty.
+        kl_beta: KL penalty weight.
+        kl_epsilon: PPO clipping epsilon.
     """
     input_ids = batch["input_ids"]            # (batch, seq_len)
     attn_mask = batch["attention_mask"]       # (batch, seq_len)
     prompt_len = batch["prompt_len"]          # int
-    num_generations = batch["num_generations"]# int
     device = input_ids.device
-    advantages = advantages.to(device)         # (batch,)
+    advantages = advantages.to(device)
 
-    # Forward pass to get the logits:
-    outputs = model(
-        input_ids=input_ids,
-        attention_mask=attn_mask,
-    )
+    # Forward pass to get the logits (current model):
+    outputs = model(input_ids=input_ids, attention_mask=attn_mask)
     logits = outputs.logits                   # (batch, seq_len, vocab_size)
-
-    # Computation of the log-probabilities using logits (log_softmax):
     log_probs = F.log_softmax(logits, dim=-1) # (batch, seq_len, vocab_size)
-
-    # Select log-probs for completion tokens (teacher forcing):
-    # Start at prompt_len-1 (last prompt token predicts first completion token), stop at -1.
-    comp_log_probs = log_probs[:, prompt_len - 1 : -1, :]   # (batch, completion_len, vocab_size)
+    comp_log_probs = log_probs[:, prompt_len - 1 : -1, :]   # (batch, completion_len, vocab_size) TEACHER FORCING.
     comp_targets = input_ids[:, prompt_len:]                 # (batch, completion_len)
-    # Gather log-probabilities for the target tokens:
-    token_logp = comp_log_probs.gather(-1, comp_targets.unsqueeze(-1)).squeeze(-1)  # (batch, completion_len)
-    # Padding-mask: fall back to eos if model has no explicit pad token
-    pad_id = (model.config.pad_token_id
-              if model.config.pad_token_id is not None
-              else getattr(model.config, "eos_token_id", None))
+    new_log_probs = comp_log_probs.gather(-1, comp_targets.unsqueeze(-1)).squeeze(-1)  # (batch, completion_len)
+    # Padding-mask:
+    pad_id = (model.config.pad_token_id if model.config.pad_token_id is not None else 
+              getattr(model.config, "eos_token_id", None))
     if pad_id is None:
-        # last resort: assume every token is valid
         comp_mask = torch.ones_like(comp_targets, dtype=torch.float)
     else:
-        comp_mask = comp_targets.ne(pad_id).float()  # (batch, completion_len)
-    # Broadcast advantages:
+        comp_mask = comp_targets.ne(pad_id).float()         # (batch, completion_len)
     adv_broadcast = advantages.unsqueeze(1) * comp_mask     # (batch, completion_len)
-    # Compute the loss:
-    loss = -adv_broadcast * token_logp                     # (batch, completion_len)
-    return loss.sum() / comp_mask.sum().clamp_min(1)       # scalar
+
+    # ==================== SIMPLE POLICY GRADIENT LOSS ====================
+    if kl_beta == 0.0 or ref_model is None or old_log_probs is None:
+        pg_loss = -adv_broadcast * new_log_probs           # (batch, completion_len)
+        loss = pg_loss.sum() / comp_mask.sum().clamp_min(1)
+        return loss
+
+    # ==================== KL + REFERENCE LOSS (PPO-style) ====================
+    # old_log_probs should be provided from rollout (model before update).
+    # Compute reference log-probs for KL penalty:
+    with torch.no_grad():
+        ref_logits = ref_model(input_ids, attention_mask=attn_mask).logits
+        ref_log_probs = F.log_softmax(ref_logits, dim=-1)
+        ref_comp_logp = ref_log_probs[:, prompt_len - 1 : -1, :].gather(-1, comp_targets.unsqueeze(-1)).squeeze(-1)
+
+    # PPO ratio
+    ratio = torch.exp(new_log_probs - old_log_probs)  # (batch, completion_len)
+    unclipped = ratio * advantages.unsqueeze(1)
+    clipped = torch.clamp(ratio, 1 - kl_epsilon, 1 + kl_epsilon) * advantages.unsqueeze(1)
+    surrogate_loss = torch.min(unclipped, clipped) * comp_mask
+
+    # KL term (per-token, reverse KL)
+    kl = torch.exp(ref_comp_logp - new_log_probs) - (ref_comp_logp - new_log_probs) - 1  # (batch, completion_len)
+    per_token_loss = surrogate_loss - kl_beta * kl * comp_mask
+    # Final loss (mean over non-pad tokens per sample, then mean over batch):
+    per_sample_loss = (per_token_loss * comp_mask).sum(dim=1) / comp_mask.sum(dim=1).clamp_min(1)
+    loss = -per_sample_loss.mean()
+    return loss
 
 # ===============================================================================
 # GRPO STEP
@@ -149,22 +182,34 @@ def grpo_step(
     num_generations: int = 4,
     max_new_tokens: int = 64,
     device: torch.device | str = "cuda",
+    ref_model=None,
+    kl_beta: float = 0.0,
+    kl_epsilon: float = 0.2,
 ) -> Tuple[torch.Tensor, Dict]:
     """
     Brings everything together: generation, reward, and policy loss.
-    Returns (loss, diagnostics)
+    Returns (loss, diagnostics).
     """
+    compute_pg = (kl_beta == 0.0 or ref_model is None)
     batch = generate_completions(
         model, tokenizer, prompts, 
         num_generations=num_generations,
         max_new_tokens=max_new_tokens,
         device=device,
+        compute_old_log_probs=not compute_pg,
     )
-    # Decode predictions:
     pred_texts = tokenizer.batch_decode(batch["input_ids"][:, batch["prompt_len"] :], skip_special_tokens=True)
-    rewards = reward_fn(pred_texts, targets * num_generations)  # Targets repeated.
+    rewards = reward_fn(pred_texts, targets * num_generations)
     advantages = group_rewards_normalization(rewards, num_generations)
-    loss = token_policy_loss(model, batch, advantages)
+    loss = token_policy_loss(
+        model,
+        batch,
+        advantages,
+        old_log_probs=batch.get("old_log_probs", None),
+        ref_model=ref_model,
+        kl_beta=kl_beta,
+        kl_epsilon=kl_epsilon,
+    )
     diagnostics = {
         "raw_reward_mean": rewards.mean().item(),
         "adv_std": advantages.std().item(),

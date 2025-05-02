@@ -32,6 +32,12 @@ def build_argparser() -> argparse.ArgumentParser:
     p.add_argument("--fp16",       action="store_true")
     p.add_argument("--device",     default="cuda" if torch.cuda.is_available() else "cpu")
     p.add_argument("--inference",  action="store_true", help="Use device_map='auto' for inference mode")
+    p.add_argument("--kl_beta", type=float, default=0.0,
+                   help="0 = reference-free; >0 adds KL penalty.")
+    p.add_argument("--kl_epsilon", type=float, default=0.2,
+                   help="KL penalty clipping value.")
+    p.add_argument("--ref_model_name", default=None,
+                   help="HF name/path for frozen reference (defaults to model_name)")
     return p
 
 # ===============================================================================
@@ -88,6 +94,18 @@ def main():
         model.resize_token_embeddings(len(tokenizer))
     model.to(args.device).train()
 
+    # Load reference model if KL is enabled:
+    ref_model = None
+    if args.kl_beta > 0:
+        ref_model = AutoModelForCausalLM.from_pretrained(
+            args.ref_model_name or args.model_name,
+            torch_dtype=torch.float16 if args.fp16 else torch.float32,
+            device_map="auto" if args.device.startswith("cuda") else None
+        )
+        ref_model.to(args.device).eval()
+        for p in ref_model.parameters():
+            p.requires_grad = False
+
     # Dataset loading:
     train_ds, val_ds = du.load_task_dataset(args.task)
     train_prompts = du.build_prompts(train_ds, args.task)
@@ -118,6 +136,9 @@ def main():
             num_generations=args.gens_m,
             max_new_tokens=64,
             device=args.device,
+            ref_model=ref_model,
+            kl_beta=args.kl_beta,
+            kl_epsilon=getattr(args, 'kl_epsilon', 0.2),
         )
 
         # Back-propagation:
@@ -131,6 +152,7 @@ def main():
         step_bar.set_postfix(loss=float(loss), reward=diag["raw_reward_mean"])
         t_board.add_scalar("train/loss", float(loss), step)
         t_board.add_scalar("train/r_mean", diag["raw_reward_mean"], step)
+        t_board.add_scalar("train/kl_beta", args.kl_beta, step)
 
         # Evaluation and checkpointing:
         if step % args.eval_every == 0 or step == args.steps:
