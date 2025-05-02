@@ -139,6 +139,16 @@ def token_policy_loss(
         comp_mask = torch.ones_like(comp_targets, dtype=torch.float)
     else:
         comp_mask = comp_targets.ne(pad_id).float()         # (batch, completion_len)
+
+    # Shape checks:
+    # Check advantages shape
+    if advantages.shape[0] != input_ids.shape[0]:
+        raise ValueError(f"advantages shape {advantages.shape} does not match batch size {input_ids.shape[0]}")
+    # Check old_log_probs shape if provided:
+    if kl_beta != 0.0 and ref_model is not None and old_log_probs is not None:
+        if old_log_probs.shape != new_log_probs.shape:
+            raise ValueError(f"old_log_probs shape {old_log_probs.shape} does not match new_log_probs shape {new_log_probs.shape}")
+
     adv_broadcast = advantages.unsqueeze(1) * comp_mask     # (batch, completion_len)
 
     # ==================== SIMPLE POLICY GRADIENT LOSS ====================
