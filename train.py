@@ -48,8 +48,8 @@ def seed_setup(seed: int):
 @torch.no_grad()
 def evaluation(model, tokenizer, val_prompts, val_targets, reward_fn,
                num_generations, max_new_tokens, device):
+    """Greedy single completion per prompt."""
     model.eval()
-    # Greedy single completion per prompt:
     outs = []
     for i in range(0, len(val_prompts), 32):
         slice_prompts = val_prompts[i:i+32]
