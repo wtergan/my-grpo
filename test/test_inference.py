@@ -38,9 +38,14 @@ def test_repl_single_prompt(monkeypatch):
     monkeypatch.setattr(T, 'generate', lambda *a, **kw: "4")
     # Patch model/tokenizer to dummy objects
     monkeypatch.setattr(T, 'load_model', lambda *a, **kw: (None, None))
-    monkeypatch.setattr(T, 'build_parser', lambda: type('P', (), {'parse_args': lambda: type('A', (), {
-        'model_name': '', 'ckpt': None, 'device': 'cpu', 'prompts': None, 'task': '', 'out': None, 'max_new_tokens': 10, 'targets': None
-    })()})())
+    monkeypatch.setattr(
+        T, 'build_parser',
+        lambda: type('P', (), {
+            'parse_args': lambda *a, **kw: type('A', (), {
+                'model_name': '', 'ckpt': None, 'device': 'cpu', 'prompts': None, 'task': '', 'out': None, 'max_new_tokens': 10, 'targets': None
+            })()
+        })()
+    )
     T.main()
 
 # ===============================================================================
@@ -54,7 +59,12 @@ def test_batch_mode(tmp_path, monkeypatch):
     # Patch generate, load_model, build_parser as above
     monkeypatch.setattr(T, 'generate', lambda *a, **kw: "dummy")
     monkeypatch.setattr(T, 'load_model', lambda *a, **kw: (None, None))
-    monkeypatch.setattr(T, 'build_parser', lambda: type('P', (), {'parse_args': lambda: type('A', (), {
-        'model_name': '', 'ckpt': None, 'device': 'cpu', 'prompts': str(prompts_file), 'task': '', 'out': None, 'max_new_tokens': 10, 'targets': None
-    })()})())
+    monkeypatch.setattr(
+        T, 'build_parser',
+        lambda: type('P', (), {
+            'parse_args': lambda *a, **kw: type('A', (), {
+                'model_name': '', 'ckpt': None, 'device': 'cpu', 'prompts': str(prompts_file), 'task': '', 'out': None, 'max_new_tokens': 10, 'targets': None
+            })()
+        })()
+    )
     T.main()
