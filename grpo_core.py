@@ -12,18 +12,6 @@ from torch.nn import functional as F
 # ===============================================================================
 # BATCH GENERATION
 # ===============================================================================
-
-def compute_log_probs(model, input_ids, attention_mask, prompt_len):
-    """Returns log-probs for completions (tokens after prompt) for each sequence in batch."""
-    with torch.no_grad():
-        outputs = model(input_ids=input_ids, attention_mask=attention_mask)
-        logits = outputs.logits  # (batch, seq_len, vocab)
-        log_probs = F.log_softmax(logits, dim=-1)
-        comp_targets = input_ids[:, prompt_len:]
-        comp_log_probs = log_probs[:, prompt_len - 1 : -1, :] # TEACHER FORCING
-        old_log_probs = comp_log_probs.gather(-1, comp_targets.unsqueeze(-1)).squeeze(-1)
-    return old_log_probs
-
 def generate_completions(
     model: PreTrainedModel,
     tokenizer: PreTrainedTokenizerBase,
@@ -69,6 +57,17 @@ def generate_completions(
     if compute_old_log_probs:
         batch["old_log_probs"] = compute_log_probs(model, full_ids, attn_mask, prompt_length)
     return batch
+
+def compute_log_probs(model, input_ids, attention_mask, prompt_len):
+    """Returns log-probs for completions (tokens after prompt) for each sequence in batch."""
+    with torch.no_grad():
+        outputs = model(input_ids=input_ids, attention_mask=attention_mask)
+        logits = outputs.logits  # (batch, seq_len, vocab)
+        log_probs = F.log_softmax(logits, dim=-1)
+        comp_targets = input_ids[:, prompt_len:]
+        comp_log_probs = log_probs[:, prompt_len - 1 : -1, :] # TEACHER FORCING
+        old_log_probs = comp_log_probs.gather(-1, comp_targets.unsqueeze(-1)).squeeze(-1)
+    return old_log_probs
 
 # ===============================================================================
 # REWARD NORMALIZATION
