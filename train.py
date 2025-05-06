@@ -63,69 +63,67 @@ def evaluation(model, tokenizer, val_prompts, val_targets, reward_fn,
 # ===============================================================================
 # MAIN TRAINING LOOP
 # ===============================================================================
-def main(config):
-    train_cfg = config['training']
-    seed_setup(train_cfg['random_seed'])
-    Path(train_cfg['ckpt_dir']).mkdir(exist_ok=True, parents=True)
+def main(train_cfg, model_cfg, data_cfg):
+    seed_setup(train_cfg['seed'])
+    Path(train_cfg['save_dir']).mkdir(exist_ok=True, parents=True)
 
     # Model and token initialization:
     model_kwargs = {
-        "torch_dtype": torch.bfloat16 if config['model']['dtype'] == 'bfloat16' else torch.float16 \
-            if config['model']['dtype'] == 'float16' else torch.float32,
+        "torch_dtype": torch.bfloat16 if model_cfg['dtype'] == 'bfloat16' else torch.float16 if model_cfg['dtype'] == 'float16' else torch.float32,
     }
-    if config['model'].get('inference', False) and config['model']['device'].startswith("cuda"):
+    if model_cfg.get('inference', False) and model_cfg['device'].startswith("cuda"):
         model_kwargs["device_map"] = "auto"
     model = AutoModelForCausalLM.from_pretrained(
-        config['model']['model_path'],
+        model_cfg['model_path'],
         **model_kwargs
     )
-    tokenizer = AutoTokenizer.from_pretrained(config['model']['model_path'])
+    tokenizer = AutoTokenizer.from_pretrained(model_cfg['model_path'])
     if tokenizer.pad_token is None:
         tokenizer.add_special_tokens({'pad_token': '[PAD]'})
     if tokenizer.pad_token_id != model.config.pad_token_id:
         model.resize_token_embeddings(len(tokenizer))
-    model.to(config['model']['device']).train()
+    model.to(model_cfg['device']).train()
 
     # Set up mixed precision context:
-    env = mixed_precision_env(config['model']['device'], dtype=config['model']['dtype'])
+    env = mixed_precision_env(model_cfg['device'], dtype=model_cfg['dtype'])
     context = env['context']
 
     # GradScaler for mixed-precision (only CUDA):
-    scaler = torch.amp.GradScaler(device=config['model']['device']) if config['model']['device'].startswith('cuda') else None
+    scaler = torch.amp.GradScaler(device=model_cfg['device']) if model_cfg['device'].startswith('cuda') else None
 
     # Load reference model if KL is enabled:
     ref_model = None
     if train_cfg.get('kl_beta', 0) > 0:
         ref_model = AutoModelForCausalLM.from_pretrained(
-            train_cfg.get('ref_model_name', config['model']['model_path']),
-            torch_dtype=torch.bfloat16 if config['model']['dtype'] == 'bfloat16' else torch.float16 if config['model']['dtype'] == 'float16' else torch.float32,
-            device_map="auto" if config['model']['device'].startswith("cuda") else None
+            train_cfg.get('ref_model_name', model_cfg['model_path']),
+            torch_dtype=torch.bfloat16 if model_cfg['dtype'] == 'bfloat16' else torch.float16 if model_cfg['dtype'] == 'float16' else torch.float32,
+            device_map="auto" if model_cfg['device'].startswith("cuda") else None
         )
-        ref_model.to(config['model']['device']).eval()
+        ref_model.to(model_cfg['device']).eval()
         for p in ref_model.parameters():
             p.requires_grad = False
 
     # Dataset loading:
-    train_ds, val_ds = du.load_task_dataset(config['data']['data_path'])
-    train_prompts = du.build_prompts(train_ds, config['data']['data_path'])
-    val_prompts = du.build_prompts(val_ds, config['data']['data_path'])
-    train_targets = du.target_extraction(train_ds, config['data']['data_path'])
-    val_targets = du.target_extraction(val_ds, config['data']['data_path'])
-    reward_fn = lambda preds, tgts: du.compute_binary_reward(preds, tgts, config['data']['data_path'])
+    train_ds, val_ds = du.load_task_dataset(data_cfg['data_path'])
+    train_prompts = du.build_prompts(train_ds, data_cfg['data_path'])
+    val_prompts = du.build_prompts(val_ds, data_cfg['data_path'])
+    train_targets = du.target_extraction(train_ds, data_cfg['data_path'])
+    val_targets = du.target_extraction(val_ds, data_cfg['data_path'])
+    reward_fn = lambda preds, tgts: du.compute_binary_reward(preds, tgts, data_cfg['data_path'])
 
     # Optimizer:
-    optimizer = torch.optim.AdamW(model.parameters(), lr=train_cfg['learning_rate'], betas=tuple(train_cfg['betas']))
+    optimizer = torch.optim.AdamW(model.parameters(), lr=train_cfg['lr'], betas=(0.9, 0.999))
     scheduler = get_cosine_schedule_with_warmup(
-        optimizer, num_warmup_steps=train_cfg.get('warmup', 100), num_training_steps=train_cfg['max_gen_len'])
+        optimizer, num_warmup_steps=train_cfg.get('warmup', 100), num_training_steps=train_cfg['steps'])
     
     # Logging setup:
-    t_board = SummaryWriter(log_dir=train_cfg['log_dir'])
-    step_bar = tqdm(range(1, train_cfg['max_gen_len'] + 1), desc="train-step")
+    t_board = SummaryWriter(log_dir=f"runs/{time.strftime('%Y%m%d-%H%M%S')}")
+    step_bar = tqdm(range(1, train_cfg['steps'] + 1), desc="train-step")
 
     # Training Loop:
     for step in step_bar:
         # Sampling N prompts:
-        idx = random.sample(range(len(train_prompts)), train_cfg['batch_size'])
+        idx = random.sample(range(len(train_prompts)), train_cfg['batch_n'])
         prompts = [train_prompts[i] for i in idx]
         targets = [train_targets[i] for i in idx]
 
@@ -133,9 +131,9 @@ def main(config):
         with context:
             loss, diag = gc.grpo_step(
                 model, tokenizer, prompts, targets, reward_fn,
-                num_generations=train_cfg['num_questions_per_batch'],
-                max_new_tokens=train_cfg['max_gen_len'],
-                device=config['model']['device'],
+                num_generations=train_cfg['gens_m'],
+                max_new_tokens=64,
+                device=model_cfg['device'],
                 ref_model=ref_model,
                 kl_beta=train_cfg.get('kl_beta', 0.0),
                 kl_epsilon=train_cfg.get('kl_epsilon', 0.2),
@@ -146,12 +144,12 @@ def main(config):
         if scaler is not None:
             scaler.scale(loss).backward()
             scaler.unscale_(optimizer)
-            torch.nn.utils.clip_grad_norm_(model.parameters(), train_cfg['max_grad_norm'])
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             scaler.step(optimizer)
             scaler.update()
         else:
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), train_cfg['max_grad_norm'])
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optimizer.step()
         scheduler.step()
         
@@ -160,16 +158,14 @@ def main(config):
         t_board.add_scalar("train/loss", float(loss), step)
         t_board.add_scalar("train/r_mean", diag["raw_reward_mean"], step)
         t_board.add_scalar("train/kl_beta", train_cfg.get('kl_beta', 0.0), step)
-        t_board.add_scalar("train/kl_epsilon", train_cfg.get('kl_epsilon', 0.2), step)
-        t_board.add_scalar("train/learning_rate", optimizer.param_groups[0]['lr'], step)
-        
+
         # Evaluation and checkpointing:
-        if step % train_cfg['eval_interval'] == 0 or step == train_cfg['max_gen_len']:
+        if step % train_cfg['eval_every'] == 0 or step == train_cfg['steps']:
             with context:
                 acc = evaluation(model, tokenizer, val_prompts, val_targets, reward_fn, 
-                              train_cfg['num_questions_per_batch'], 64, config['model']['device'])
+                              train_cfg['gens_m'], 64, model_cfg['device'])
             t_board.add_scalar("val/accuracy", acc, step)
-            torch.save(model.state_dict(), f"{train_cfg['ckpt_dir']}/model_step_{step}.pt")
+            torch.save(model.state_dict(), f"{train_cfg['save_dir']}/model_step_{step}.pt")
             model.train()
         
     # Close logging:
@@ -181,4 +177,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
     with open(args.config, "r") as f:
         config = yaml.safe_load(f)
-    main(config)
+    train_cfg = config['training']
+    model_cfg = config['model']
+    data_cfg = config['data']
+    main(train_cfg, model_cfg, data_cfg)

@@ -45,50 +45,41 @@ def generate(model, tokenizer, prompt, max_new_tokens, device):
 # ===============================================================================
 # MAIN TESTING ROUTINE
 # ===============================================================================
-def main(config):
-    test_cfg = config['testing']
-    model, tokenizer = load_model(test_cfg['model_name'], test_cfg['ckpt'], test_cfg['device'])
+def main(test_cfg, model_cfg, data_cfg):
+    model = AutoModelForCausalLM.from_pretrained(
+        test_cfg.get('model_name', model_cfg['model_path']),
+        torch_dtype=torch.bfloat16 if model_cfg['dtype'] == 'bfloat16' else torch.float16 if model_cfg['dtype'] == 'float16' else torch.float32,
+    )
+    tokenizer = AutoTokenizer.from_pretrained(test_cfg.get('model_name', model_cfg['model_path']))
+    if tokenizer.pad_token is None:
+        tokenizer.add_special_tokens({'pad_token': '[PAD]'})
+    if tokenizer.pad_token_id != model.config.pad_token_id:
+        model.resize_token_embeddings(len(tokenizer))
+    model.to(model_cfg['device']).eval()
 
-    # REPL MODE: Meaning no prompt file(s) were provided, allow user to input prompts:
-    if test_cfg['prompts'] is None:
-        print("Enter prompt(s) (empty line to quit):")
-        while True:
-            try:
-                prompt = input(">> ").strip()
-            except (EOFError, KeyboardInterrupt):
-                print("No prompt entered. Exiting.")
-                break
-            if not prompt:
-                print("No prompt entered. Exiting.")
-                break
-            t0 = time.time()
-            completion = generate(model, tokenizer, prompt, test_cfg['max_new_tokens'], test_cfg['device'])
-            delta_t = time.time() - t0
-            print(f"\n{completion}\n took {delta_t:.2f}seconds\n")
-    
-    # BATCH MODE: Meaning prompt file(s) were provided, lets process them:
+    prompts_file = test_cfg.get('prompts')
+    task = test_cfg.get('task', data_cfg['data_path'])
+    out_file = test_cfg.get('out')
+    max_new_tokens = test_cfg.get('max_new_tokens', 128)
+
+    if prompts_file:
+        with open(prompts_file, 'r') as f:
+            prompts = [line.strip() for line in f if line.strip()]
     else:
-        prompts = [line.rstrip("\n") for line in open(test_cfg['prompts'])]
-        targets = None
-        if 'targets' in test_cfg:
-            targets = [line.rstrip("\n") for line in open(test_cfg['targets'])]
-            assert len(prompts) == len(targets), "prompts and targets must have the same length."
-        
-        output_records = []
-        reward_fn = lambda preds, tgts: du.compute_binary_reward(preds, tgts, test_cfg['task'])
-        for i, prompt in enumerate(prompts):
-            completion = generate(model, tokenizer, prompt, test_cfg['max_new_tokens'], test_cfg['device'])
-            rec = {"prompt": prompt, "completion": completion}
-            if targets:
-                rec["target"] = targets[i]
-                rec["reward"] = float(reward_fn([completion], [targets[i]])[0])
-            output_records.append(rec)
-            print(f"[{i:>3}] {rec['reward'] if 'reward' in rec else ''}\t{rec['completion'][:80]}")
+        prompts = [input('Prompt: ')]
 
-        if test_cfg.get('out') is not None:
-            with open(test_cfg['out'], "w") as f:
-                json.dump(output_records, f, indent=2)
-            print(f"Wrote {len(output_records)} lines to {test_cfg['out']}")
+    output_records = []
+    for prompt in prompts:
+        inputs = tokenizer(prompt, return_tensors='pt').to(model_cfg['device'])
+        gen = model.generate(**inputs, max_new_tokens=max_new_tokens, pad_token_id=tokenizer.eos_token_id)
+        completion = tokenizer.batch_decode(gen[:, inputs['input_ids'].shape[1]:], skip_special_tokens=True)[0]
+        output_records.append({'prompt': prompt, 'completion': completion})
+
+    if out_file is not None:
+        with open(out_file, 'w') as f:
+            json.dump(output_records, f, indent=2)
+    else:
+        print(json.dumps(output_records, indent=2))
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -96,4 +87,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
     with open(args.config, "r") as f:
         config = yaml.safe_load(f)
-    main(config)
+    test_cfg = config['testing']
+    model_cfg = config['model']
+    data_cfg = config['data']
+    main(test_cfg, model_cfg, data_cfg)

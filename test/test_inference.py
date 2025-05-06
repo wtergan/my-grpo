@@ -58,9 +58,9 @@ def test_batch_mode(tmp_path, monkeypatch):
     output_file = tmp_path / "output.jsonl"
     monkeypatch.setattr(T, 'generate', lambda *a, **kw: "dummy")
     monkeypatch.setattr(T, 'load_model', lambda *a, **kw: (None, None))
-    # Patch config to use prompts file and output file
     config['testing']['prompts'] = str(prompts_file)
     config['testing']['out'] = str(output_file)
+    config['testing']['max_new_tokens'] = 32
     T.main(config)
     assert output_file.exists()
 
@@ -73,6 +73,7 @@ def test_batch_mode_missing_file(tmp_path, monkeypatch):
     monkeypatch.setattr(T, 'load_model', lambda *a, **kw: (None, None))
     config['testing']['prompts'] = str(prompts_file)
     config['testing']['out'] = str(output_file)
+    config['testing']['max_new_tokens'] = 32
     with pytest.raises(Exception):
         T.main(config)
 
@@ -86,6 +87,7 @@ def test_batch_mode_empty_file(tmp_path, monkeypatch):
     monkeypatch.setattr(T, 'load_model', lambda *a, **kw: (None, None))
     config['testing']['prompts'] = str(prompts_file)
     config['testing']['out'] = str(output_file)
+    config['testing']['max_new_tokens'] = 32
     T.main(config)
     assert output_file.exists()
 

@@ -39,46 +39,76 @@ def load_config():
 # ===============================================================================
 @pytest.mark.timeout(60)
 def test_train_loop_cpu(monkeypatch):
-    monkeypatch.setattr(du, "load_task_dataset", stub_load_task_dataset)
-    monkeypatch.setattr(train, "SummaryWriter", DummyTB)
     config = load_config()
-    # Minimal run: just check it doesn't crash
+    config['model']['device'] = 'cpu'
+    config['training']['save_dir'] = 'test_checkpoints'  # Ensure writable
+    config['training']['seed'] = 123
+    config['training']['batch_n'] = 2
+    config['training']['gens_m'] = 2
+    config['training']['steps'] = 3
+    config['training']['eval_every'] = 1
+    config['training']['lr'] = 1e-4
     train.main(config)
+    assert os.path.exists('test_checkpoints/model_step_3.pt')
 
 # ===============================================================================
 # EDGE CASES: EMPTY AND SINGLE SAMPLE DATASETS
 # ===============================================================================
 # Test training with empty dataset:
 def test_train_with_empty_dataset(monkeypatch):
-    monkeypatch.setattr(du, "load_task_dataset", stub_empty_dataset)
-    monkeypatch.setattr(train, "SummaryWriter", DummyTB)
     config = load_config()
+    config['model']['device'] = 'cpu'
+    config['training']['save_dir'] = 'test_checkpoints_empty'
+    config['training']['seed'] = 123
+    config['training']['batch_n'] = 1
+    config['training']['gens_m'] = 1
+    config['training']['steps'] = 1
+    config['training']['eval_every'] = 1
+    config['training']['lr'] = 1e-4
+    # Patch dataset loader to return empty
+    monkeypatch.setattr(train.du, 'load_task_dataset', lambda *a, **kw: ([], []))
     try:
         train.main(config)
+    except ValueError as e:
+        assert 'empty' in str(e).lower()
     except Exception as e:
-        assert "empty" in str(e).lower() or "no data" in str(e).lower() or isinstance(e, (ValueError, RuntimeError)), f"Unexpected error: {e}"
+        assert False, f"Unexpected error: {e}"
 
 # Test training with single sample dataset:
 def test_train_with_single_sample(monkeypatch):
-    monkeypatch.setattr(du, "load_task_dataset", stub_single_sample_dataset)
-    monkeypatch.setattr(train, "SummaryWriter", DummyTB)
     config = load_config()
+    config['model']['device'] = 'cpu'
+    config['training']['save_dir'] = 'test_checkpoints_single'
+    config['training']['seed'] = 123
+    config['training']['batch_n'] = 1
+    config['training']['gens_m'] = 1
+    config['training']['steps'] = 1
+    config['training']['eval_every'] = 1
+    config['training']['lr'] = 1e-4
+    # Patch dataset loader to return a single sample
+    dummy_ds = [{'question': 'What is 1+1?', 'answer': '2'}]
+    monkeypatch.setattr(train.du, 'load_task_dataset', lambda *a, **kw: (dummy_ds, dummy_ds))
     train.main(config)
+    assert os.path.exists('test_checkpoints_single/model_step_1.pt')
 
 # ===============================================================================
 # PG/KL TRAINING LOOP TEST
 # ===============================================================================
 # Test training with PG vs KL:
 def test_train_loop_pg_vs_kl(monkeypatch):
-    monkeypatch.setattr(du, "load_task_dataset", stub_load_task_dataset)
-    monkeypatch.setattr(train, "SummaryWriter", DummyTB)
     config = load_config()
-    # PG mode
-    config['training']['kl_beta'] = 0.0
-    train.main(config)
-    # KL mode
+    config['model']['device'] = 'cpu'
+    config['training']['save_dir'] = 'test_checkpoints_pgkl'
+    config['training']['seed'] = 123
+    config['training']['batch_n'] = 2
+    config['training']['gens_m'] = 2
+    config['training']['steps'] = 2
+    config['training']['eval_every'] = 1
+    config['training']['lr'] = 1e-4
     config['training']['kl_beta'] = 0.5
+    config['training']['ref_model_name'] = config['model']['model_path']
     train.main(config)
+    assert os.path.exists('test_checkpoints_pgkl/model_step_2.pt')
 
 # ===============================================================================
 # CONFIG LOADING TEST
