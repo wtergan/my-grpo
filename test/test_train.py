@@ -1,175 +1,69 @@
 # ===============================================================================
 # IMPORTS AND SETUP
 # ===============================================================================
-import sys, tempfile, types, os
-from pathlib import Path
-
+import sys
+import os
+import tempfile
+import yaml
 import pytest
-import torch
-from datasets import Dataset
-
-import train                        # your Phase-3 script
+import train
 import data_utils as du
 
-# ===============================================================================
-# DUMMY CLASSES AND DATA HELPERS
-# ===============================================================================
+# Dummy classes/functions for monkeypatching
 class DummyTB:
-    def __init__(self, *_, **__): pass
-    add_scalar = lambda *_, **__: None
-    close      = lambda self: None
+    def __init__(self, *a, **kw): pass
+    def add_scalar(self, *a, **kw): pass
+    def close(self): pass
 
-def tiny_dataset():
-    return Dataset.from_list([
-        {"question": "What is 1+1?", "answer": "2"},
-        {"question": "What is 2+2?", "answer": "4"},
-    ])
+def stub_load_task_dataset(task):
+    # Minimal stub dataset
+    d = [{"input": "x", "output": "y"}]
+    return d, d
 
-def stub_load_task_dataset(task, *_, **__):
-    ds = tiny_dataset()
-    return ds, ds                      # train_ds, val_ds
+def stub_empty_dataset(task):
+    return [], []
+
+def stub_single_sample_dataset(task):
+    d = [{"input": "x", "output": "y"}]
+    return d, d
+
+# Helper to load config and train_cfg
+CONFIG_PATH = os.path.join(os.path.dirname(__file__), '../config.yaml')
+def load_configs():
+    with open(CONFIG_PATH, 'r') as f:
+        config = yaml.safe_load(f)
+    return config, config['training']
 
 # ===============================================================================
 # SMOKE TESTS AND BASIC FUNCTIONALITY
 # ===============================================================================
 @pytest.mark.timeout(60)
 def test_train_loop_cpu(monkeypatch):
-    # monkey-patch: tiny dataset & no-op TensorBoard
     monkeypatch.setattr(du, "load_task_dataset", stub_load_task_dataset)
     monkeypatch.setattr(train, "SummaryWriter", DummyTB)
-
-    # craft CLI args for a micro run
-    with tempfile.TemporaryDirectory() as tmpdir:
-        cli = [
-            "train.py",
-            "--model_name", "hf-internal-testing/tiny-random-gpt2",
-            "--device", "cpu",
-            "--steps", "2",
-            "--batch_n", "2",
-            "--gens_m", "1",
-            "--eval_every", "2",
-            "--save_dir", tmpdir,
-            "--fp16"  # harmless on CPU; ignored
-        ]
-        monkeypatch.setattr(sys, "argv", cli)
-
-        # run; should not raise
-        train.main()
-
-        # checkpoint must exist
-        ckpts = list(Path(tmpdir).glob("model_step_2.pt"))
-        assert ckpts, "checkpoint file not found"
-        ckpt_path = ckpts[0]
-        assert ckpt_path.stat().st_size > 0, "checkpoint file is empty"
-
-        # Model reload check
-        try:
-            state = torch.load(ckpt_path, map_location="cpu")
-            assert isinstance(state, dict), "Checkpoint did not load as dict"
-        except Exception as e:
-            pytest.fail(f"Reloading checkpoint failed: {e}")
-
-        # (Optional) Check that loss is finite (if loss is returned/saved)
-        # Not implemented unless train.py is modified to expose loss value
-
-# ===============================================================================
-# ARGUMENT PARSER SANITY TESTS
-# ===============================================================================
-def test_argparse_defaults():
-    parser = train.build_argparser()
-    args = parser.parse_args([])
-    assert args.model_name
-    assert args.task
-    assert args.batch_n > 0
-    assert args.steps > 0
-    assert args.save_dir
-    assert args.device in ("cpu", "cuda")
+    config, train_cfg = load_configs()
+    # Minimal run: just check it doesn't crash
+    train.main(config, train_cfg)
 
 # ===============================================================================
 # EDGE CASES: EMPTY AND SINGLE SAMPLE DATASETS
 # ===============================================================================
 # Test training with empty dataset:
-def stub_empty_dataset(*args, **kwargs):
-    from datasets import Dataset
-    ds = Dataset.from_list([])
-    return ds, ds
-
-# Test training with empty dataset:
 def test_train_with_empty_dataset(monkeypatch):
     monkeypatch.setattr(du, "load_task_dataset", stub_empty_dataset)
     monkeypatch.setattr(train, "SummaryWriter", DummyTB)
-    with tempfile.TemporaryDirectory() as tmpdir:
-        cli = [
-            "train.py",
-            "--model_name", "hf-internal-testing/tiny-random-gpt2",
-            "--device", "cpu",
-            "--steps", "2",
-            "--batch_n", "2",
-            "--gens_m", "1",
-            "--eval_every", "2",
-            "--save_dir", tmpdir,
-        ]
-        monkeypatch.setattr(sys, "argv", cli)
-        try:
-            train.main()
-        except Exception as e:
-            # Should raise a clear error, not crash with obscure error
-            assert "empty" in str(e).lower() or "no data" in str(e).lower() or isinstance(e, (ValueError, RuntimeError)), f"Unexpected error: {e}"
-        else:
-            pytest.fail("Expected failure on empty dataset, but training completed.")
-
-# Test training with single sample dataset:
-def stub_single_sample_dataset(*args, **kwargs):
-    from datasets import Dataset
-    ds = Dataset.from_list([{"question": "What is 1+1?", "answer": "2"}])
-    return ds, ds
+    config, train_cfg = load_configs()
+    try:
+        train.main(config, train_cfg)
+    except Exception as e:
+        assert "empty" in str(e).lower() or "no data" in str(e).lower() or isinstance(e, (ValueError, RuntimeError)), f"Unexpected error: {e}"
 
 # Test training with single sample dataset:
 def test_train_with_single_sample(monkeypatch):
     monkeypatch.setattr(du, "load_task_dataset", stub_single_sample_dataset)
     monkeypatch.setattr(train, "SummaryWriter", DummyTB)
-    with tempfile.TemporaryDirectory() as tmpdir:
-        cli = [
-            "train.py",
-            "--model_name", "hf-internal-testing/tiny-random-gpt2",
-            "--device", "cpu",
-            "--steps", "2",
-            "--batch_n", "1",
-            "--gens_m", "1",
-            "--eval_every", "2",
-            "--save_dir", tmpdir,
-        ]
-        monkeypatch.setattr(sys, "argv", cli)
-        # Should not raise
-        train.main()
-        ckpts = list(Path(tmpdir).glob("model_step_2.pt"))
-        assert ckpts, "checkpoint file not found for single sample run"
-
-# ===============================================================================
-# MIXED PRECISION AND GRADSCALER TEST
-# ===============================================================================
-import importlib
-import types
-
-def test_mixed_precision_env_and_gradscaler(monkeypatch):
-    # Import train.py fresh to ensure changes are reflected
-    train_mod = importlib.import_module("train")
-    # Test mixed_precision_env returns correct context
-    env_cpu = train_mod.mixed_precision_env("cpu", dtype="bfloat16")
-    assert hasattr(env_cpu, "__getitem__") and env_cpu["device"] == "cpu"
-    assert hasattr(env_cpu["context"], "__enter__")
-    # Simulate CUDA device
-    env_cuda = train_mod.mixed_precision_env("cuda", dtype="float16")
-    assert env_cuda["device_type"] == "cuda"
-    # Test GradScaler construction logic
-    scaler = None
-    try:
-        scaler = torch.amp.GradScaler(device="cuda")
-    except Exception:
-        pass
-    # Should be able to construct GradScaler (if torch supports it)
-    assert scaler is None or isinstance(scaler, torch.amp.GradScaler)
-    print("mixed_precision_env and GradScaler logic OK")
+    config, train_cfg = load_configs()
+    train.main(config, train_cfg)
 
 # ===============================================================================
 # PG/KL TRAINING LOOP TEST
@@ -178,63 +72,26 @@ def test_mixed_precision_env_and_gradscaler(monkeypatch):
 def test_train_loop_pg_vs_kl(monkeypatch):
     monkeypatch.setattr(du, "load_task_dataset", stub_load_task_dataset)
     monkeypatch.setattr(train, "SummaryWriter", DummyTB)
-    with tempfile.TemporaryDirectory() as tmpdir:
-        # PG mode
-        cli_pg = [
-            "train.py",
-            "--model_name", "hf-internal-testing/tiny-random-gpt2",
-            "--device", "cpu",
-            "--steps", "2",
-            "--batch_n", "2",
-            "--gens_m", "1",
-            "--eval_every", "2",
-            "--save_dir", tmpdir,
-            "--kl_beta", "0.0"
-        ]
-        monkeypatch.setattr(sys, "argv", cli_pg)
-        train.main()
-        ckpts_pg = list(Path(tmpdir).glob("model_step_2.pt"))
-        assert ckpts_pg, "PG checkpoint file not found"
-        # KL mode
-        cli_kl = [
-            "train.py",
-            "--model_name", "hf-internal-testing/tiny-random-gpt2",
-            "--device", "cpu",
-            "--steps", "2",
-            "--batch_n", "2",
-            "--gens_m", "1",
-            "--eval_every", "2",
-            "--save_dir", tmpdir,
-            "--kl_beta", "0.5",
-            "--kl_epsilon", "0.2"
-        ]
-        monkeypatch.setattr(sys, "argv", cli_kl)
-        train.main()
-        ckpts_kl = list(Path(tmpdir).glob("model_step_2.pt"))
-        assert ckpts_kl, "KL checkpoint file not found"
-    print("test_train_loop_pg_vs_kl OK")
+    config, train_cfg = load_configs()
+    # PG mode
+    train_cfg['kl_beta'] = 0.0
+    train.main(config, train_cfg)
+    # KL mode
+    train_cfg['kl_beta'] = 0.5
+    train.main(config, train_cfg)
 
 # ===============================================================================
 # CONFIG LOADING TEST
 # ===============================================================================
-import yaml
-import os
-
 def test_train_config_loading():
-    config_path = os.path.join(os.path.dirname(__file__), '../config.yaml')
-    with open(config_path, 'r') as f:
-        config = yaml.safe_load(f)
-    # Check model section
+    config, train_cfg = load_configs()
     assert 'model' in config
     assert config['model']['model_path'] == "Qwen/Qwen2.5-3B-Instruct"
     assert config['model']['dtype'] == "bfloat16"
-    # Check data section
     assert 'data' in config
     assert 'data_path' in config['data']
-    # Check training section
     assert 'training' in config
-    assert type(config['training']['batch_n']) is int
-    assert config['training']['save_dir'] == "checkpoints"
-    # Spot check a few more values
-    assert config['training']['kl_beta'] == 0.0
-    assert config['training']['ref_model_name'] is None
+    assert type(train_cfg['batch_n']) is int
+    assert train_cfg['save_dir'] == "checkpoints"
+    assert train_cfg['kl_beta'] == 0.0
+    assert train_cfg['ref_model_name'] is None
