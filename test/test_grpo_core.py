@@ -120,10 +120,11 @@ def test_compute_log_probs_chunked_and_grad():
     # Test no_grad=True (old log probs)
     log_probs_ng = compute_log_probs(model, input_ids, attn_mask, prompt_len, chunk_size=4, no_grad=True)
     assert log_probs_ng.shape[0] == input_ids.shape[0]
-    # Test no_grad=False (should require grad)
-    input_ids = input_ids.clone().detach().requires_grad_(True)
+    # Test no_grad=False (should require grad on output)
     log_probs_g = compute_log_probs(model, input_ids, attn_mask, prompt_len, chunk_size=4, no_grad=False)
     assert log_probs_g.requires_grad
+    # Test backward works
+    log_probs_g.sum().backward()
     # Check chunking correctness (sum close to full softmax)
     with torch.no_grad():
         log_probs_full = compute_log_probs(model, batch["input_ids"], attn_mask, prompt_len, chunk_size=1000, no_grad=True)
