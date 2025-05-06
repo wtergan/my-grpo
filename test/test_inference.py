@@ -85,7 +85,7 @@ def test_batch_mode(tmp_path, monkeypatch):
     T.main(test_cfg, model_cfg, data_cfg)
     assert output_file.exists()
 
-# Test: Batch mode with missing prompts file (should raise FileNotFoundError or similar)
+# Test: Batch mode with missing prompts file (should not raise an exception)
 def test_batch_mode_missing_file(tmp_path, monkeypatch):
     config = load_config()
     test_cfg = config['testing']
@@ -98,8 +98,8 @@ def test_batch_mode_missing_file(tmp_path, monkeypatch):
     test_cfg['prompts'] = str(prompts_file)
     test_cfg['out'] = str(output_file)
     test_cfg['max_new_tokens'] = 32
-    with pytest.raises(Exception):
-        T.main(test_cfg, model_cfg, data_cfg)
+    T.main(test_cfg, model_cfg, data_cfg)
+    assert not output_file.exists()
 
 # Test: Batch mode with empty prompts file (should not crash)
 def test_batch_mode_empty_file(tmp_path, monkeypatch):

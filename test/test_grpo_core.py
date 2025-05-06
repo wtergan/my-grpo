@@ -5,11 +5,45 @@ import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from grpo_core import generate_completions, group_rewards_normalization, token_policy_loss, grpo_step, compute_log_probs
 import contextlib
+import pytest
 
 # ===============================================================================
 # MODEL SETUP
 # ===============================================================================
 MODEL_NAME = "Qwen/Qwen2.5-3B-Instruct"
+
+class DummyTokenizer:
+    def __init__(self):
+        self.pad_token_id = 0
+        self.pad_token = '[PAD]'
+        self.eos_token_id = 0
+    def add_special_tokens(self, *a, **kw):
+        return None
+    def batch_decode(self, *a, **kw):
+        return ["dummy"]
+    def __call__(self, *a, **kw):
+        class Dummy:
+            def to(self, device):
+                return self
+            input_ids = [[0]]
+        return Dummy()
+
+class DummyModel:
+    config = type('config', (), {'pad_token_id': 0})()
+    def resize_token_embeddings(self, n):
+        return None
+    def to(self, device):
+        return self
+    def eval(self):
+        return self
+    def generate(self, **kwargs):
+        return [[0, 0, 0]]
+
+@pytest.fixture(autouse=True)
+def patch_transformers(monkeypatch):
+    monkeypatch.setattr(AutoTokenizer, 'from_pretrained', lambda *a, **kw: DummyTokenizer())
+    monkeypatch.setattr(AutoModelForCausalLM, 'from_pretrained', lambda *a, **kw: DummyModel())
+
 tok = AutoTokenizer.from_pretrained(MODEL_NAME)
 model = AutoModelForCausalLM.from_pretrained(MODEL_NAME)
 model.eval()
