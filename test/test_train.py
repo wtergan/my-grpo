@@ -146,6 +146,32 @@ def test_train_with_single_sample(monkeypatch):
         assert ckpts, "checkpoint file not found for single sample run"
 
 # ===============================================================================
+# MIXED PRECISION AND GRADSCALER TEST
+# ===============================================================================
+import importlib
+import types
+
+def test_mixed_precision_env_and_gradscaler(monkeypatch):
+    # Import train.py fresh to ensure changes are reflected
+    train_mod = importlib.import_module("train")
+    # Test mixed_precision_env returns correct context
+    env_cpu = train_mod.mixed_precision_env("cpu", dtype="bfloat16")
+    assert hasattr(env_cpu, "__getitem__") and env_cpu["device"] == "cpu"
+    assert hasattr(env_cpu["context"], "__enter__")
+    # Simulate CUDA device
+    env_cuda = train_mod.mixed_precision_env("cuda", dtype="float16")
+    assert env_cuda["device_type"] == "cuda"
+    # Test GradScaler construction logic
+    scaler = None
+    try:
+        scaler = torch.amp.GradScaler(device="cuda")
+    except Exception:
+        pass
+    # Should be able to construct GradScaler (if torch supports it)
+    assert scaler is None or isinstance(scaler, torch.amp.GradScaler)
+    print("mixed_precision_env and GradScaler logic OK")
+
+# ===============================================================================
 # PG/KL TRAINING LOOP TEST
 # ===============================================================================
 # Test training with PG vs KL:

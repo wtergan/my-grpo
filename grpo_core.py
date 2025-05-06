@@ -5,9 +5,9 @@ Core logic for GRPO: Batch generation, reward and advantage computation, policy 
 from __future__ import annotations
 from typing import List, Dict, Tuple
 from transformers import PreTrainedModel, PreTrainedTokenizerBase
-import math
 import torch
 from torch.nn import functional as F
+import contextlib
 
 # ===============================================================================
 # BATCH GENERATION
@@ -58,16 +58,28 @@ def generate_completions(
         batch["old_log_probs"] = compute_log_probs(model, full_ids, attn_mask, prompt_length)
     return batch
 
-def compute_log_probs(model, input_ids, attention_mask, prompt_len):
-    """Returns log-probs for completions (tokens after prompt) for each sequence in batch."""
-    with torch.no_grad():
+def compute_log_probs(model, input_ids, attention_mask, prompt_len, chunk_size: int = 64, no_grad: bool = True):
+    """
+    Returns log-probs for completions (tokens after prompt) for each sequence in batch, computed chunk-wise 
+    to reduce memory. Set no_grad=False to enable gradients.
+    """
+    context = torch.no_grad() if no_grad else contextlib.nullcontext()
+    with context:
         outputs = model(input_ids=input_ids, attention_mask=attention_mask)
         logits = outputs.logits  # (batch, seq_len, vocab)
-        log_probs = F.log_softmax(logits, dim=-1)
-        comp_targets = input_ids[:, prompt_len:]
-        comp_log_probs = log_probs[:, prompt_len - 1 : -1, :] # TEACHER FORCING
-        old_log_probs = comp_log_probs.gather(-1, comp_targets.unsqueeze(-1)).squeeze(-1)
-    return old_log_probs
+        comp_logits = logits[:, prompt_len - 1 : -1, :]  # (batch, completion_len, vocab) TEACHER FORCING
+        comp_targets = input_ids[:, prompt_len:]        # (batch, completion_len)
+        batch_size, completion_len, _ = comp_logits.shape
+        log_probs = torch.zeros(batch_size, completion_len, device=logits.device)
+        for i in range(0, completion_len, chunk_size):
+            end_idx = min(i + chunk_size, completion_len)
+            chunk_logits = comp_logits[:, i:end_idx, :]
+            chunk_ids = comp_targets[:, i:end_idx]
+            chunk_log_probs = F.log_softmax(chunk_logits, dim=-1)
+            log_probs[:, i:end_idx] = chunk_log_probs.gather(-1, chunk_ids.unsqueeze(-1)).squeeze(-1)
+            del chunk_logits, chunk_log_probs
+            torch.cuda.empty_cache()
+        return log_probs
 
 # ===============================================================================
 # REWARD NORMALIZATION
@@ -124,20 +136,15 @@ def token_policy_loss(
     device = input_ids.device
     advantages = advantages.to(device)
 
-    # Forward pass to get the logits (current model):
-    outputs = model(input_ids=input_ids, attention_mask=attn_mask)
-    logits = outputs.logits                   # (batch, seq_len, vocab_size)
-    log_probs = F.log_softmax(logits, dim=-1) # (batch, seq_len, vocab_size)
-    comp_log_probs = log_probs[:, prompt_len - 1 : -1, :]   # (batch, completion_len, vocab_size) TEACHER FORCING.
-    comp_targets = input_ids[:, prompt_len:]                 # (batch, completion_len)
-    new_log_probs = comp_log_probs.gather(-1, comp_targets.unsqueeze(-1)).squeeze(-1)  # (batch, completion_len)
+    # Compute per-token log-probs via chunked softmax, no_grad=False for gradients:
+    new_log_probs = compute_log_probs(model, input_ids, attn_mask, prompt_len, no_grad=False)
     # Padding-mask:
     pad_id = (model.config.pad_token_id if model.config.pad_token_id is not None else 
               getattr(model.config, "eos_token_id", None))
     if pad_id is None:
-        comp_mask = torch.ones_like(comp_targets, dtype=torch.float)
+        comp_mask = torch.ones_like(new_log_probs, dtype=torch.float)
     else:
-        comp_mask = comp_targets.ne(pad_id).float()         # (batch, completion_len)
+        comp_mask = input_ids[:, prompt_len:].ne(pad_id).float()
 
     # Shape checks:
     # Check advantages shape
@@ -146,7 +153,8 @@ def token_policy_loss(
     # Check old_log_probs shape if provided:
     if kl_beta != 0.0 and ref_model is not None and old_log_probs is not None:
         if old_log_probs.shape != new_log_probs.shape:
-            raise ValueError(f"old_log_probs shape {old_log_probs.shape} does not match new_log_probs shape {new_log_probs.shape}")
+            raise ValueError(f"old_log_probs shape {old_log_probs.shape} \
+                does not match new_log_probs shape {new_log_probs.shape}")
 
     adv_broadcast = advantages.unsqueeze(1) * comp_mask     # (batch, completion_len)
 
@@ -162,7 +170,7 @@ def token_policy_loss(
     with torch.no_grad():
         ref_logits = ref_model(input_ids, attention_mask=attn_mask).logits
         ref_log_probs = F.log_softmax(ref_logits, dim=-1)
-        ref_comp_logp = ref_log_probs[:, prompt_len - 1 : -1, :].gather(-1, comp_targets.unsqueeze(-1)).squeeze(-1)
+        ref_comp_logp = ref_log_probs[:, prompt_len - 1 : -1, :].gather(-1, input_ids[:, prompt_len:].unsqueeze(-1)).squeeze(-1)
 
     # PPO ratio
     ratio = torch.exp(new_log_probs - old_log_probs)  # (batch, completion_len)

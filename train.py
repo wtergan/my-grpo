@@ -13,6 +13,22 @@ from transformers import (AutoModelForCausalLM,
 from tqdm.auto import tqdm
 import data_utils as du
 import grpo_core as gc
+import contextlib
+
+# =============================================================================
+# MIXED PRECISION SETUP
+# =============================================================================
+def mixed_precision_env(device_name, dtype="bfloat16"):
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
+    device_type = 'cuda' if 'cuda' in device_name else 'cpu'
+    ptdtype = {'float32': torch.float32, 'bfloat16': torch.bfloat16, 'float16': torch.float16}[dtype]
+    context = contextlib.nullcontext() if device_type == 'cpu' else torch.amp.autocast(device_type=device_type, dtype=ptdtype)
+    return {
+        'device': device_name,
+        'context': context,
+        'device_type': device_type,
+    }
 
 # ===============================================================================
 # ARGUMENT PARSER
@@ -94,6 +110,13 @@ def main():
         model.resize_token_embeddings(len(tokenizer))
     model.to(args.device).train()
 
+    # Set up mixed precision context:
+    env = mixed_precision_env(args.device, dtype="bfloat16" if not args.fp16 else "float16")
+    context = env['context']
+
+    # GradScaler for mixed-precision (only CUDA):
+    scaler = torch.amp.GradScaler(device=args.device) if args.device.startswith('cuda') else None
+
     # Load reference model if KL is enabled:
     ref_model = None
     if args.kl_beta > 0:
@@ -131,21 +154,29 @@ def main():
         targets = [train_targets[i] for i in idx]
 
         # Forward-propagation:
-        loss, diag = gc.grpo_step(
-            model, tokenizer, prompts, targets, reward_fn,
-            num_generations=args.gens_m,
-            max_new_tokens=64,
-            device=args.device,
-            ref_model=ref_model,
-            kl_beta=args.kl_beta,
-            kl_epsilon=getattr(args, 'kl_epsilon', 0.2),
-        )
+        with context:
+            loss, diag = gc.grpo_step(
+                model, tokenizer, prompts, targets, reward_fn,
+                num_generations=args.gens_m,
+                max_new_tokens=64,
+                device=args.device,
+                ref_model=ref_model,
+                kl_beta=args.kl_beta,
+                kl_epsilon=getattr(args, 'kl_epsilon', 0.2),
+            )
 
         # Back-propagation:
         optimizer.zero_grad()
-        loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-        optimizer.step()
+        if scaler is not None:
+            scaler.scale(loss).backward()
+            scaler.unscale_(optimizer)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            optimizer.step()
         scheduler.step()
         
         # Logging process:
@@ -156,8 +187,9 @@ def main():
 
         # Evaluation and checkpointing:
         if step % args.eval_every == 0 or step == args.steps:
-            acc = evaluation(model, tokenizer, val_prompts, val_targets, reward_fn, 
-                          args.gens_m, 64, args.device)
+            with context:
+                acc = evaluation(model, tokenizer, val_prompts, val_targets, reward_fn, 
+                              args.gens_m, 64, args.device)
             t_board.add_scalar("val/accuracy", acc, step)
             torch.save(model.state_dict(), f"{args.save_dir}/model_step_{step}.pt")
             model.train()

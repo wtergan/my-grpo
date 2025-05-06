@@ -3,7 +3,8 @@
 # ===============================================================================
 import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM
-from grpo_core import generate_completions, group_rewards_normalization, token_policy_loss, grpo_step
+from grpo_core import generate_completions, group_rewards_normalization, token_policy_loss, grpo_step, compute_log_probs
+import contextlib
 
 # ===============================================================================
 # MODEL SETUP
@@ -108,6 +109,28 @@ def test_token_policy_loss_shape_mismatch():
         assert False, "Should raise on advantages shape mismatch"
 
 # ===============================================================================
+# COMPUTE_LOG_PROBS TESTS (CHUNKING, NOGRAD, GRAD)
+# ===============================================================================
+def test_compute_log_probs_chunked_and_grad():
+    prompts = ["hello", "world"]
+    batch = generate_completions(model, tok, prompts, num_generations=2, max_new_tokens=8, device="cpu")
+    input_ids = batch["input_ids"]
+    attn_mask = batch["attention_mask"]
+    prompt_len = 2
+    # Test no_grad=True (old log probs)
+    log_probs_ng = compute_log_probs(model, input_ids, attn_mask, prompt_len, chunk_size=4, no_grad=True)
+    assert log_probs_ng.shape[0] == input_ids.shape[0]
+    # Test no_grad=False (should require grad)
+    input_ids = input_ids.clone().detach().requires_grad_(True)
+    log_probs_g = compute_log_probs(model, input_ids, attn_mask, prompt_len, chunk_size=4, no_grad=False)
+    assert log_probs_g.requires_grad
+    # Check chunking correctness (sum close to full softmax)
+    with torch.no_grad():
+        log_probs_full = compute_log_probs(model, batch["input_ids"], attn_mask, prompt_len, chunk_size=1000, no_grad=True)
+    assert torch.allclose(log_probs_ng, log_probs_full, atol=1e-4)
+    print("compute_log_probs chunking, grad/nograd OK")
+
+# ===============================================================================
 # GRPO STEP TESTS (PG & KL)
 # ===============================================================================
 # Test basic GRPO step:
@@ -165,6 +188,7 @@ if __name__ == "__main__":
     test_token_policy_loss_pg_vs_kl()
     test_token_policy_loss_raises_on_missing_old_log_probs()
     test_token_policy_loss_shape_mismatch()
+    test_compute_log_probs_chunked_and_grad()
     test_grpo_step_basic()
     test_grpo_step_pg_vs_kl()
     print("All grpo_core.py tests passed!")
