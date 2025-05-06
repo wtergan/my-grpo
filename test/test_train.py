@@ -41,9 +41,9 @@ def load_configs():
 def test_train_loop_cpu(monkeypatch):
     monkeypatch.setattr(du, "load_task_dataset", stub_load_task_dataset)
     monkeypatch.setattr(train, "SummaryWriter", DummyTB)
-    config, train_cfg = load_configs()
+    config = load_configs()[0]
     # Minimal run: just check it doesn't crash
-    train.main(config, train_cfg)
+    train.main(config)
 
 # ===============================================================================
 # EDGE CASES: EMPTY AND SINGLE SAMPLE DATASETS
@@ -52,9 +52,9 @@ def test_train_loop_cpu(monkeypatch):
 def test_train_with_empty_dataset(monkeypatch):
     monkeypatch.setattr(du, "load_task_dataset", stub_empty_dataset)
     monkeypatch.setattr(train, "SummaryWriter", DummyTB)
-    config, train_cfg = load_configs()
+    config = load_configs()[0]
     try:
-        train.main(config, train_cfg)
+        train.main(config)
     except Exception as e:
         assert "empty" in str(e).lower() or "no data" in str(e).lower() or isinstance(e, (ValueError, RuntimeError)), f"Unexpected error: {e}"
 
@@ -62,8 +62,8 @@ def test_train_with_empty_dataset(monkeypatch):
 def test_train_with_single_sample(monkeypatch):
     monkeypatch.setattr(du, "load_task_dataset", stub_single_sample_dataset)
     monkeypatch.setattr(train, "SummaryWriter", DummyTB)
-    config, train_cfg = load_configs()
-    train.main(config, train_cfg)
+    config = load_configs()[0]
+    train.main(config)
 
 # ===============================================================================
 # PG/KL TRAINING LOOP TEST
@@ -72,13 +72,13 @@ def test_train_with_single_sample(monkeypatch):
 def test_train_loop_pg_vs_kl(monkeypatch):
     monkeypatch.setattr(du, "load_task_dataset", stub_load_task_dataset)
     monkeypatch.setattr(train, "SummaryWriter", DummyTB)
-    config, train_cfg = load_configs()
+    config = load_configs()[0]
     # PG mode
-    train_cfg['kl_beta'] = 0.0
-    train.main(config, train_cfg)
+    config['training']['kl_beta'] = 0.0
+    train.main(config)
     # KL mode
-    train_cfg['kl_beta'] = 0.5
-    train.main(config, train_cfg)
+    config['training']['kl_beta'] = 0.5
+    train.main(config)
 
 # ===============================================================================
 # CONFIG LOADING TEST

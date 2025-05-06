@@ -85,10 +85,9 @@ def main(config):
             output_records.append(rec)
             print(f"[{i:>3}] {rec['reward'] if 'reward' in rec else ''}\t{rec['completion'][:80]}")
 
-        if 'out' in test_cfg:
+        if test_cfg.get('out') is not None:
             with open(test_cfg['out'], "w") as f:
-                for rec in output_records:
-                    f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+                json.dump(output_records, f, indent=2)
             print(f"Wrote {len(output_records)} lines to {test_cfg['out']}")
 
 if __name__ == "__main__":

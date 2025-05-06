@@ -64,8 +64,9 @@ def evaluation(model, tokenizer, val_prompts, val_targets, reward_fn,
 # MAIN TRAINING LOOP
 # ===============================================================================
 def main(config):
-    seed_setup(config['training']['random_seed'])
-    Path(config['training']['ckpt_dir']).mkdir(exist_ok=True, parents=True)
+    train_cfg = config['training']
+    seed_setup(train_cfg['random_seed'])
+    Path(train_cfg['ckpt_dir']).mkdir(exist_ok=True, parents=True)
 
     # Model and token initialization:
     model_kwargs = {
@@ -94,9 +95,9 @@ def main(config):
 
     # Load reference model if KL is enabled:
     ref_model = None
-    if config['training'].get('kl_beta', 0) > 0:
+    if train_cfg.get('kl_beta', 0) > 0:
         ref_model = AutoModelForCausalLM.from_pretrained(
-            config['training'].get('ref_model_name', config['model']['model_path']),
+            train_cfg.get('ref_model_name', config['model']['model_path']),
             torch_dtype=torch.bfloat16 if config['model']['dtype'] == 'bfloat16' else torch.float16 if config['model']['dtype'] == 'float16' else torch.float32,
             device_map="auto" if config['model']['device'].startswith("cuda") else None
         )
@@ -113,18 +114,18 @@ def main(config):
     reward_fn = lambda preds, tgts: du.compute_binary_reward(preds, tgts, config['data']['data_path'])
 
     # Optimizer:
-    optimizer = torch.optim.AdamW(model.parameters(), lr=config['training']['learning_rate'], betas=tuple(config['training']['betas']))
+    optimizer = torch.optim.AdamW(model.parameters(), lr=train_cfg['learning_rate'], betas=tuple(train_cfg['betas']))
     scheduler = get_cosine_schedule_with_warmup(
-        optimizer, num_warmup_steps=config['training'].get('warmup', 100), num_training_steps=config['training']['max_gen_len'])
+        optimizer, num_warmup_steps=train_cfg.get('warmup', 100), num_training_steps=train_cfg['max_gen_len'])
     
     # Logging setup:
-    t_board = SummaryWriter(log_dir=config['training']['log_dir'])
-    step_bar = tqdm(range(1, config['training']['max_gen_len'] + 1), desc="train-step")
+    t_board = SummaryWriter(log_dir=train_cfg['log_dir'])
+    step_bar = tqdm(range(1, train_cfg['max_gen_len'] + 1), desc="train-step")
 
     # Training Loop:
     for step in step_bar:
         # Sampling N prompts:
-        idx = random.sample(range(len(train_prompts)), config['training']['batch_size'])
+        idx = random.sample(range(len(train_prompts)), train_cfg['batch_size'])
         prompts = [train_prompts[i] for i in idx]
         targets = [train_targets[i] for i in idx]
 
@@ -132,12 +133,12 @@ def main(config):
         with context:
             loss, diag = gc.grpo_step(
                 model, tokenizer, prompts, targets, reward_fn,
-                num_generations=config['training']['num_questions_per_batch'],
-                max_new_tokens=config['training']['max_gen_len'],
+                num_generations=train_cfg['num_questions_per_batch'],
+                max_new_tokens=train_cfg['max_gen_len'],
                 device=config['model']['device'],
                 ref_model=ref_model,
-                kl_beta=config['training'].get('kl_beta', 0.0),
-                kl_epsilon=config['training'].get('kl_epsilon', 0.2),
+                kl_beta=train_cfg.get('kl_beta', 0.0),
+                kl_epsilon=train_cfg.get('kl_epsilon', 0.2),
             )
 
         # Back-propagation:
@@ -145,12 +146,12 @@ def main(config):
         if scaler is not None:
             scaler.scale(loss).backward()
             scaler.unscale_(optimizer)
-            torch.nn.utils.clip_grad_norm_(model.parameters(), config['training']['max_grad_norm'])
+            torch.nn.utils.clip_grad_norm_(model.parameters(), train_cfg['max_grad_norm'])
             scaler.step(optimizer)
             scaler.update()
         else:
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), config['training']['max_grad_norm'])
+            torch.nn.utils.clip_grad_norm_(model.parameters(), train_cfg['max_grad_norm'])
             optimizer.step()
         scheduler.step()
         
@@ -158,17 +159,17 @@ def main(config):
         step_bar.set_postfix(loss=float(loss), reward=diag["raw_reward_mean"])
         t_board.add_scalar("train/loss", float(loss), step)
         t_board.add_scalar("train/r_mean", diag["raw_reward_mean"], step)
-        t_board.add_scalar("train/kl_beta", config['training'].get('kl_beta', 0.0), step)
-        t_board.add_scalar("train/kl_epsilon", config['training'].get('kl_epsilon', 0.2), step)
+        t_board.add_scalar("train/kl_beta", train_cfg.get('kl_beta', 0.0), step)
+        t_board.add_scalar("train/kl_epsilon", train_cfg.get('kl_epsilon', 0.2), step)
         t_board.add_scalar("train/learning_rate", optimizer.param_groups[0]['lr'], step)
         
         # Evaluation and checkpointing:
-        if step % config['training']['eval_interval'] == 0 or step == config['training']['max_gen_len']:
+        if step % train_cfg['eval_interval'] == 0 or step == train_cfg['max_gen_len']:
             with context:
                 acc = evaluation(model, tokenizer, val_prompts, val_targets, reward_fn, 
-                              config['training']['num_questions_per_batch'], 64, config['model']['device'])
+                              train_cfg['num_questions_per_batch'], 64, config['model']['device'])
             t_board.add_scalar("val/accuracy", acc, step)
-            torch.save(model.state_dict(), f"{config['training']['ckpt_dir']}/model_step_{step}.pt")
+            torch.save(model.state_dict(), f"{train_cfg['ckpt_dir']}/model_step_{step}.pt")
             model.train()
         
     # Close logging:
