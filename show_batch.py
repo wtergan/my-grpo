@@ -36,5 +36,32 @@ def show_batch():
     if "old_log_probs" in batch:
         print("old_log_probs shape:", batch["old_log_probs"].shape)
 
+    # Full softmax log-prob computation (no chunking)
+    import torch.nn.functional as F
+    input_ids = batch["input_ids"]
+    attn_mask = batch["attention_mask"]
+    prompt_len = batch["prompt_len"]
+    with torch.no_grad():
+        outputs = model(input_ids=input_ids, attention_mask=attn_mask)
+        logits = outputs.logits  # (batch, seq_len, vocab)
+        print("logits shape:", logits.shape)
+        print("logits sample:", logits[0, :prompt_len+2, :8])
+        comp_logits = logits[:, prompt_len - 1 : -1, :]
+        print("comp_logits shape:", comp_logits.shape)
+        print("comp_logits sample:", comp_logits[0, :2, :8])
+        comp_targets = input_ids[:, prompt_len:]
+        print("comp_targets shape:", comp_targets.shape)
+        print("comp_targets sample:", comp_targets[0, :8])
+        # Full softmax over all completions at once
+        log_probs_full = F.log_softmax(comp_logits, dim=-1)
+        print("log_probs_full shape:", log_probs_full.shape)
+        print("log_probs_full sample:", log_probs_full[0, :2, :8])
+        gathered = log_probs_full.gather(-1, comp_targets.unsqueeze(-1)).squeeze(-1)
+        print("gathered log_probs shape:", gathered.shape)
+        print("gathered log_probs sample:", gathered[0, :8])
+        log_probs = gathered
+        print("Final log_probs shape:", log_probs.shape)
+        print("Final log_probs sample:", log_probs[0, :8])
+
 if __name__ == "__main__":
     show_batch()
