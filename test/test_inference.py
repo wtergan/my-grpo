@@ -55,19 +55,24 @@ def test_batch_mode(tmp_path, monkeypatch):
     config = load_config()
     prompts_file = tmp_path / "prompts.txt"
     prompts_file.write_text("What is 2+2?\nWhat is the capital of France?\n")
+    output_file = tmp_path / "output.jsonl"
     monkeypatch.setattr(T, 'generate', lambda *a, **kw: "dummy")
     monkeypatch.setattr(T, 'load_model', lambda *a, **kw: (None, None))
-    # Patch config to use prompts file
+    # Patch config to use prompts file and output file
     config['testing']['prompts'] = str(prompts_file)
+    config['testing']['out'] = str(output_file)
     T.main(config)
+    assert output_file.exists()
 
 # Test: Batch mode with missing prompts file (should raise FileNotFoundError or similar)
 def test_batch_mode_missing_file(tmp_path, monkeypatch):
     config = load_config()
     prompts_file = tmp_path / "does_not_exist.txt"
+    output_file = tmp_path / "output.jsonl"
     monkeypatch.setattr(T, 'generate', lambda *a, **kw: "dummy")
     monkeypatch.setattr(T, 'load_model', lambda *a, **kw: (None, None))
     config['testing']['prompts'] = str(prompts_file)
+    config['testing']['out'] = str(output_file)
     with pytest.raises(Exception):
         T.main(config)
 
@@ -76,10 +81,13 @@ def test_batch_mode_empty_file(tmp_path, monkeypatch):
     config = load_config()
     prompts_file = tmp_path / "empty.txt"
     prompts_file.write_text("")
+    output_file = tmp_path / "output.jsonl"
     monkeypatch.setattr(T, 'generate', lambda *a, **kw: "dummy")
     monkeypatch.setattr(T, 'load_model', lambda *a, **kw: (None, None))
     config['testing']['prompts'] = str(prompts_file)
+    config['testing']['out'] = str(output_file)
     T.main(config)
+    assert output_file.exists()
 
 # ===============================================================================
 # CONFIG LOADING TEST

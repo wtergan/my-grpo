@@ -27,12 +27,12 @@ def stub_single_sample_dataset(task):
     d = [{"input": "x", "output": "y"}]
     return d, d
 
-# Helper to load config and train_cfg
+# Helper to load config
 CONFIG_PATH = os.path.join(os.path.dirname(__file__), '../config.yaml')
-def load_configs():
+def load_config():
     with open(CONFIG_PATH, 'r') as f:
         config = yaml.safe_load(f)
-    return config, config['training']
+    return config
 
 # ===============================================================================
 # SMOKE TESTS AND BASIC FUNCTIONALITY
@@ -41,7 +41,7 @@ def load_configs():
 def test_train_loop_cpu(monkeypatch):
     monkeypatch.setattr(du, "load_task_dataset", stub_load_task_dataset)
     monkeypatch.setattr(train, "SummaryWriter", DummyTB)
-    config = load_configs()[0]
+    config = load_config()
     # Minimal run: just check it doesn't crash
     train.main(config)
 
@@ -52,7 +52,7 @@ def test_train_loop_cpu(monkeypatch):
 def test_train_with_empty_dataset(monkeypatch):
     monkeypatch.setattr(du, "load_task_dataset", stub_empty_dataset)
     monkeypatch.setattr(train, "SummaryWriter", DummyTB)
-    config = load_configs()[0]
+    config = load_config()
     try:
         train.main(config)
     except Exception as e:
@@ -62,7 +62,7 @@ def test_train_with_empty_dataset(monkeypatch):
 def test_train_with_single_sample(monkeypatch):
     monkeypatch.setattr(du, "load_task_dataset", stub_single_sample_dataset)
     monkeypatch.setattr(train, "SummaryWriter", DummyTB)
-    config = load_configs()[0]
+    config = load_config()
     train.main(config)
 
 # ===============================================================================
@@ -72,7 +72,7 @@ def test_train_with_single_sample(monkeypatch):
 def test_train_loop_pg_vs_kl(monkeypatch):
     monkeypatch.setattr(du, "load_task_dataset", stub_load_task_dataset)
     monkeypatch.setattr(train, "SummaryWriter", DummyTB)
-    config = load_configs()[0]
+    config = load_config()
     # PG mode
     config['training']['kl_beta'] = 0.0
     train.main(config)
@@ -84,13 +84,14 @@ def test_train_loop_pg_vs_kl(monkeypatch):
 # CONFIG LOADING TEST
 # ===============================================================================
 def test_train_config_loading():
-    config, train_cfg = load_configs()
+    config = load_config()
     assert 'model' in config
     assert config['model']['model_path'] == "Qwen/Qwen2.5-3B-Instruct"
     assert config['model']['dtype'] == "bfloat16"
     assert 'data' in config
     assert 'data_path' in config['data']
     assert 'training' in config
+    train_cfg = config['training']
     assert type(train_cfg['batch_n']) is int
     assert train_cfg['save_dir'] == "checkpoints"
     assert train_cfg['kl_beta'] == 0.0
