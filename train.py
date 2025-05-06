@@ -159,7 +159,9 @@ def main(config):
         t_board.add_scalar("train/loss", float(loss), step)
         t_board.add_scalar("train/r_mean", diag["raw_reward_mean"], step)
         t_board.add_scalar("train/kl_beta", config['training'].get('kl_beta', 0.0), step)
-
+        t_board.add_scalar("train/kl_epsilon", config['training'].get('kl_epsilon', 0.2), step)
+        t_board.add_scalar("train/learning_rate", optimizer.param_groups[0]['lr'], step)
+        
         # Evaluation and checkpointing:
         if step % config['training']['eval_interval'] == 0 or step == config['training']['max_gen_len']:
             with context:
