@@ -40,15 +40,17 @@ def load_config():
 @pytest.mark.timeout(60)
 def test_train_loop_cpu(monkeypatch):
     config = load_config()
-    config['model']['device'] = 'cpu'
-    config['training']['save_dir'] = 'test_checkpoints'  # Ensure writable
-    config['training']['seed'] = 123
-    config['training']['batch_n'] = 2
-    config['training']['gens_m'] = 2
-    config['training']['steps'] = 3
-    config['training']['eval_every'] = 1
-    config['training']['lr'] = 1e-4
-    train.main(config)
+    train_cfg = config['training']
+    model_cfg = config['model']
+    train_cfg['save_dir'] = 'test_checkpoints'  # Ensure writable
+    train_cfg['seed'] = 123
+    train_cfg['batch_n'] = 2
+    train_cfg['gens_m'] = 2
+    train_cfg['steps'] = 3
+    train_cfg['eval_every'] = 1
+    train_cfg['lr'] = 1e-4
+    model_cfg['device'] = 'cpu'
+    train.main(train_cfg, model_cfg)
     assert os.path.exists('test_checkpoints/model_step_3.pt')
 
 # ===============================================================================
@@ -57,18 +59,20 @@ def test_train_loop_cpu(monkeypatch):
 # Test training with empty dataset:
 def test_train_with_empty_dataset(monkeypatch):
     config = load_config()
-    config['model']['device'] = 'cpu'
-    config['training']['save_dir'] = 'test_checkpoints_empty'
-    config['training']['seed'] = 123
-    config['training']['batch_n'] = 1
-    config['training']['gens_m'] = 1
-    config['training']['steps'] = 1
-    config['training']['eval_every'] = 1
-    config['training']['lr'] = 1e-4
+    train_cfg = config['training']
+    model_cfg = config['model']
+    train_cfg['save_dir'] = 'test_checkpoints_empty'
+    train_cfg['seed'] = 123
+    train_cfg['batch_n'] = 1
+    train_cfg['gens_m'] = 1
+    train_cfg['steps'] = 1
+    train_cfg['eval_every'] = 1
+    train_cfg['lr'] = 1e-4
+    model_cfg['device'] = 'cpu'
     # Patch dataset loader to return empty
     monkeypatch.setattr(train.du, 'load_task_dataset', lambda *a, **kw: ([], []))
     try:
-        train.main(config)
+        train.main(train_cfg, model_cfg)
     except ValueError as e:
         assert 'empty' in str(e).lower()
     except Exception as e:
@@ -77,18 +81,19 @@ def test_train_with_empty_dataset(monkeypatch):
 # Test training with single sample dataset:
 def test_train_with_single_sample(monkeypatch):
     config = load_config()
-    config['model']['device'] = 'cpu'
-    config['training']['save_dir'] = 'test_checkpoints_single'
-    config['training']['seed'] = 123
-    config['training']['batch_n'] = 1
-    config['training']['gens_m'] = 1
-    config['training']['steps'] = 1
-    config['training']['eval_every'] = 1
-    config['training']['lr'] = 1e-4
-    # Patch dataset loader to return a single sample
+    train_cfg = config['training']
+    model_cfg = config['model']
+    train_cfg['save_dir'] = 'test_checkpoints_single'
+    train_cfg['seed'] = 123
+    train_cfg['batch_n'] = 1
+    train_cfg['gens_m'] = 1
+    train_cfg['steps'] = 1
+    train_cfg['eval_every'] = 1
+    train_cfg['lr'] = 1e-4
+    model_cfg['device'] = 'cpu'
     dummy_ds = [{'question': 'What is 1+1?', 'answer': '2'}]
     monkeypatch.setattr(train.du, 'load_task_dataset', lambda *a, **kw: (dummy_ds, dummy_ds))
-    train.main(config)
+    train.main(train_cfg, model_cfg)
     assert os.path.exists('test_checkpoints_single/model_step_1.pt')
 
 # ===============================================================================
@@ -97,17 +102,19 @@ def test_train_with_single_sample(monkeypatch):
 # Test training with PG vs KL:
 def test_train_loop_pg_vs_kl(monkeypatch):
     config = load_config()
-    config['model']['device'] = 'cpu'
-    config['training']['save_dir'] = 'test_checkpoints_pgkl'
-    config['training']['seed'] = 123
-    config['training']['batch_n'] = 2
-    config['training']['gens_m'] = 2
-    config['training']['steps'] = 2
-    config['training']['eval_every'] = 1
-    config['training']['lr'] = 1e-4
-    config['training']['kl_beta'] = 0.5
-    config['training']['ref_model_name'] = config['model']['model_path']
-    train.main(config)
+    train_cfg = config['training']
+    model_cfg = config['model']
+    train_cfg['save_dir'] = 'test_checkpoints_pgkl'
+    train_cfg['seed'] = 123
+    train_cfg['batch_n'] = 2
+    train_cfg['gens_m'] = 2
+    train_cfg['steps'] = 2
+    train_cfg['eval_every'] = 1
+    train_cfg['lr'] = 1e-4
+    train_cfg['kl_beta'] = 0.5
+    train_cfg['ref_model_name'] = model_cfg['model_path']
+    model_cfg['device'] = 'cpu'
+    train.main(train_cfg, model_cfg)
     assert os.path.exists('test_checkpoints_pgkl/model_step_2.pt')
 
 # ===============================================================================

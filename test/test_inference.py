@@ -20,32 +20,38 @@ def load_config():
 # Test 2: REPL exits gracefully on Ctrl+C (KeyboardInterrupt)
 def test_repl_keyboard_interrupt(monkeypatch):
     config = load_config()
+    test_cfg = config['testing']
+    model_cfg = config['model']
     def fake_input(prompt):
         raise KeyboardInterrupt()
     monkeypatch.setattr('builtins.input', fake_input)
     # Patch load_model to avoid loading real model
     monkeypatch.setattr(T, 'load_model', lambda *a, **kw: (None, None))
     # Should not raise
-    T.main(config)
+    T.main(test_cfg, model_cfg)
 
 # Test 3: REPL exits gracefully on Ctrl+D (EOFError)
 def test_repl_eof_error(monkeypatch):
     config = load_config()
+    test_cfg = config['testing']
+    model_cfg = config['model']
     def fake_input(prompt):
         raise EOFError()
     monkeypatch.setattr('builtins.input', fake_input)
     monkeypatch.setattr(T, 'load_model', lambda *a, **kw: (None, None))
     # Should not raise
-    T.main(config)
+    T.main(test_cfg, model_cfg)
 
 # Test 4: REPL generates a completion for a single prompt and exits
 def test_repl_single_prompt(monkeypatch):
     config = load_config()
+    test_cfg = config['testing']
+    model_cfg = config['model']
     prompts = iter(["What is 2+2?", ""])
     monkeypatch.setattr('builtins.input', lambda _: next(prompts))
     monkeypatch.setattr(T, 'generate', lambda *a, **kw: "4")
     monkeypatch.setattr(T, 'load_model', lambda *a, **kw: (None, None))
-    T.main(config)
+    T.main(test_cfg, model_cfg)
 
 # ===============================================================================
 # BATCH MODE TESTS
@@ -53,42 +59,48 @@ def test_repl_single_prompt(monkeypatch):
 # Test 5: Batch mode with file (minimal smoke test)
 def test_batch_mode(tmp_path, monkeypatch):
     config = load_config()
+    test_cfg = config['testing']
+    model_cfg = config['model']
     prompts_file = tmp_path / "prompts.txt"
     prompts_file.write_text("What is 2+2?\nWhat is the capital of France?\n")
     output_file = tmp_path / "output.jsonl"
     monkeypatch.setattr(T, 'generate', lambda *a, **kw: "dummy")
     monkeypatch.setattr(T, 'load_model', lambda *a, **kw: (None, None))
-    config['testing']['prompts'] = str(prompts_file)
-    config['testing']['out'] = str(output_file)
-    config['testing']['max_new_tokens'] = 32
-    T.main(config)
+    test_cfg['prompts'] = str(prompts_file)
+    test_cfg['out'] = str(output_file)
+    test_cfg['max_new_tokens'] = 32
+    T.main(test_cfg, model_cfg)
     assert output_file.exists()
 
 # Test: Batch mode with missing prompts file (should raise FileNotFoundError or similar)
 def test_batch_mode_missing_file(tmp_path, monkeypatch):
     config = load_config()
+    test_cfg = config['testing']
+    model_cfg = config['model']
     prompts_file = tmp_path / "does_not_exist.txt"
     output_file = tmp_path / "output.jsonl"
     monkeypatch.setattr(T, 'generate', lambda *a, **kw: "dummy")
     monkeypatch.setattr(T, 'load_model', lambda *a, **kw: (None, None))
-    config['testing']['prompts'] = str(prompts_file)
-    config['testing']['out'] = str(output_file)
-    config['testing']['max_new_tokens'] = 32
+    test_cfg['prompts'] = str(prompts_file)
+    test_cfg['out'] = str(output_file)
+    test_cfg['max_new_tokens'] = 32
     with pytest.raises(Exception):
-        T.main(config)
+        T.main(test_cfg, model_cfg)
 
 # Test: Batch mode with empty prompts file (should not crash)
 def test_batch_mode_empty_file(tmp_path, monkeypatch):
     config = load_config()
+    test_cfg = config['testing']
+    model_cfg = config['model']
     prompts_file = tmp_path / "empty.txt"
     prompts_file.write_text("")
     output_file = tmp_path / "output.jsonl"
     monkeypatch.setattr(T, 'generate', lambda *a, **kw: "dummy")
     monkeypatch.setattr(T, 'load_model', lambda *a, **kw: (None, None))
-    config['testing']['prompts'] = str(prompts_file)
-    config['testing']['out'] = str(output_file)
-    config['testing']['max_new_tokens'] = 32
-    T.main(config)
+    test_cfg['prompts'] = str(prompts_file)
+    test_cfg['out'] = str(output_file)
+    test_cfg['max_new_tokens'] = 32
+    T.main(test_cfg, model_cfg)
     assert output_file.exists()
 
 # ===============================================================================
