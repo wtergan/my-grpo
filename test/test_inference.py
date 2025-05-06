@@ -32,6 +32,13 @@ class DummyModel:
     def to(self, device): return self
     def eval(self): return self
     def generate(self, **kwargs): return [[0, 0, 0]]
+    def __call__(self, *args, **kwargs):
+        import torch
+        class Dummy:
+            def to(self, device): return self
+        return Dummy()
+    def parameters(self):
+        return []
 
 @pytest.fixture(autouse=True)
 def patch_inference_dependencies(monkeypatch):
