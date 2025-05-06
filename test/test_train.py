@@ -42,6 +42,7 @@ def test_train_loop_cpu(monkeypatch):
     config = load_config()
     train_cfg = config['training']
     model_cfg = config['model']
+    data_cfg = config['data']
     train_cfg['save_dir'] = 'test_checkpoints'  # Ensure writable
     train_cfg['seed'] = 123
     train_cfg['batch_n'] = 2
@@ -50,7 +51,7 @@ def test_train_loop_cpu(monkeypatch):
     train_cfg['eval_every'] = 1
     train_cfg['lr'] = 1e-4
     model_cfg['device'] = 'cpu'
-    train.main(train_cfg, model_cfg)
+    train.main(train_cfg, model_cfg, data_cfg)
     assert os.path.exists('test_checkpoints/model_step_3.pt')
 
 # ===============================================================================
@@ -61,6 +62,7 @@ def test_train_with_empty_dataset(monkeypatch):
     config = load_config()
     train_cfg = config['training']
     model_cfg = config['model']
+    data_cfg = config['data']
     train_cfg['save_dir'] = 'test_checkpoints_empty'
     train_cfg['seed'] = 123
     train_cfg['batch_n'] = 1
@@ -72,7 +74,7 @@ def test_train_with_empty_dataset(monkeypatch):
     # Patch dataset loader to return empty
     monkeypatch.setattr(train.du, 'load_task_dataset', lambda *a, **kw: ([], []))
     try:
-        train.main(train_cfg, model_cfg)
+        train.main(train_cfg, model_cfg, data_cfg)
     except ValueError as e:
         assert 'empty' in str(e).lower()
     except Exception as e:
@@ -83,6 +85,7 @@ def test_train_with_single_sample(monkeypatch):
     config = load_config()
     train_cfg = config['training']
     model_cfg = config['model']
+    data_cfg = config['data']
     train_cfg['save_dir'] = 'test_checkpoints_single'
     train_cfg['seed'] = 123
     train_cfg['batch_n'] = 1
@@ -93,7 +96,7 @@ def test_train_with_single_sample(monkeypatch):
     model_cfg['device'] = 'cpu'
     dummy_ds = [{'question': 'What is 1+1?', 'answer': '2'}]
     monkeypatch.setattr(train.du, 'load_task_dataset', lambda *a, **kw: (dummy_ds, dummy_ds))
-    train.main(train_cfg, model_cfg)
+    train.main(train_cfg, model_cfg, data_cfg)
     assert os.path.exists('test_checkpoints_single/model_step_1.pt')
 
 # ===============================================================================
@@ -104,6 +107,7 @@ def test_train_loop_pg_vs_kl(monkeypatch):
     config = load_config()
     train_cfg = config['training']
     model_cfg = config['model']
+    data_cfg = config['data']
     train_cfg['save_dir'] = 'test_checkpoints_pgkl'
     train_cfg['seed'] = 123
     train_cfg['batch_n'] = 2
@@ -114,7 +118,7 @@ def test_train_loop_pg_vs_kl(monkeypatch):
     train_cfg['kl_beta'] = 0.5
     train_cfg['ref_model_name'] = model_cfg['model_path']
     model_cfg['device'] = 'cpu'
-    train.main(train_cfg, model_cfg)
+    train.main(train_cfg, model_cfg, data_cfg)
     assert os.path.exists('test_checkpoints_pgkl/model_step_2.pt')
 
 # ===============================================================================
