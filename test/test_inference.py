@@ -26,10 +26,10 @@ def test_repl_keyboard_interrupt(monkeypatch):
     def fake_input(prompt):
         raise KeyboardInterrupt()
     monkeypatch.setattr('builtins.input', fake_input)
-    # Patch load_model to avoid loading real model
     monkeypatch.setattr(T, 'load_model', lambda *a, **kw: (None, None))
-    # Should not raise
-    T.main(test_cfg, model_cfg, data_cfg)
+    with pytest.raises(SystemExit) as e:
+        T.main(test_cfg, model_cfg, data_cfg)
+    assert e.value.code == 0
 
 # Test 3: REPL exits gracefully on Ctrl+D (EOFError)
 def test_repl_eof_error(monkeypatch):
@@ -41,8 +41,9 @@ def test_repl_eof_error(monkeypatch):
         raise EOFError()
     monkeypatch.setattr('builtins.input', fake_input)
     monkeypatch.setattr(T, 'load_model', lambda *a, **kw: (None, None))
-    # Should not raise
-    T.main(test_cfg, model_cfg, data_cfg)
+    with pytest.raises(SystemExit) as e:
+        T.main(test_cfg, model_cfg, data_cfg)
+    assert e.value.code == 0
 
 # Test 4: REPL generates a completion for a single prompt and exits
 def test_repl_single_prompt(monkeypatch):
@@ -52,9 +53,17 @@ def test_repl_single_prompt(monkeypatch):
     data_cfg = config['data']
     prompts = iter(["What is 2+2?", ""])
     monkeypatch.setattr('builtins.input', lambda _: next(prompts))
-    monkeypatch.setattr(T, 'generate', lambda *a, **kw: "4")
+    generated_outputs = []
+    def mock_generate(*args, **kwargs):
+        generated_outputs.append("mocked_output_for_first_prompt")
+        return "mocked_output_for_first_prompt"
+
+    monkeypatch.setattr(T, 'generate', mock_generate) 
     monkeypatch.setattr(T, 'load_model', lambda *a, **kw: (None, None))
-    T.main(test_cfg, model_cfg, data_cfg)
+    with pytest.raises(SystemExit) as e: 
+        T.main(test_cfg, model_cfg, data_cfg)
+    assert e.value.code == 0
+    assert len(generated_outputs) == 1
 
 # ===============================================================================
 # BATCH MODE TESTS

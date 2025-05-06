@@ -3,7 +3,7 @@ Light-weight inference/evaluation.
 """
 
 from __future__ import annotations
-import argparse, json, sys, time, pathlib
+import argparse, json, sys, time, pathlib, os
 import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM
 import data_utils as du
@@ -58,15 +58,43 @@ def main(test_cfg, model_cfg, data_cfg):
     model.to(model_cfg['device']).eval()
 
     prompts_file = test_cfg.get('prompts')
-    task = test_cfg.get('task', data_cfg['data_path'])
+    #task = test_cfg.get('task', data_cfg['data_path'])
     out_file = test_cfg.get('out')
     max_new_tokens = test_cfg.get('max_new_tokens', 128)
 
+    # BATCH MODE:
     if prompts_file:
+        if not os.path.exists(prompts_file):
+            print(f"Error: Prompts file not found: {prompts_file}")
+            return
         with open(prompts_file, 'r') as f:
             prompts = [line.strip() for line in f if line.strip()]
-    else:
-        prompts = [input('Prompt: ')]
+        if not prompts:
+            print(f"Warning: Prompts file {prompts_file} is empty.")
+            if out_file:
+                with open(out_file, 'w') as f:
+                    json.dump([], f) 
+            return
+    else: 
+        # REPL MODE:
+        prompts = []
+        try:
+            prompt_text = input('Prompt: ')
+            if prompt_text.strip(): 
+                prompts.append(prompt_text.strip())
+            else: 
+                sys.exit(0)
+        except KeyboardInterrupt:
+            sys.exit(0)
+        except EOFError:
+            sys.exit(0)
+
+    if not prompts: 
+        if out_file:
+            if prompts_file: 
+                 with open(out_file, 'w') as f:
+                    json.dump([], f)
+        return
 
     output_records = []
     for prompt in prompts:
