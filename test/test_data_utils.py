@@ -56,5 +56,40 @@ def test_binary_reward():
     r = du.compute_binary_reward(preds, target, "gsm8k")
     assert torch.allclose(r, torch.tensor([1.0, 0.0], dtype=torch.float32))
 
+# ===============================================================================
+# PYTEST FIXTURES
+# ===============================================================================
+import pytest
+
+class DummyTokenizer:
+    def __init__(self):
+        self.pad_token_id = 0
+        self.pad_token = '[PAD]'
+        self.eos_token_id = 0
+    def add_special_tokens(self, *a, **kw): return None
+    def batch_decode(self, *a, **kw): return ["dummy"]
+    def __call__(self, *a, **kw):
+        class Dummy:
+            def to(self, device): return self
+            input_ids = [[0]]
+        return Dummy()
+
+class DummyModel:
+    config = type('config', (), {'pad_token_id': 0})()
+    def resize_token_embeddings(self, n): return None
+    def to(self, device): return self
+    def eval(self): return self
+    def generate(self, **kwargs): return [[0, 0, 0]]
+
+@pytest.fixture(autouse=True)
+def patch_data_utils_dependencies(monkeypatch):
+    try:
+        import data_utils as du
+        import transformers
+        monkeypatch.setattr(transformers.AutoTokenizer, 'from_pretrained', staticmethod(lambda *a, **kw: DummyTokenizer()))
+        monkeypatch.setattr(transformers.AutoModelForCausalLM, 'from_pretrained', staticmethod(lambda *a, **kw: DummyModel()))
+    except ImportError:
+        pass
+
 if __name__ == "__main__":
     pytest.main([__file__])

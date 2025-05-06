@@ -9,6 +9,34 @@ import pytest
 import train
 import data_utils as du
 
+# === BEGIN: Dummy classes and autouse fixture for monkeypatching ===
+class DummyTokenizer:
+    def __init__(self):
+        self.pad_token_id = 0
+        self.pad_token = '[PAD]'
+        self.eos_token_id = 0
+    def add_special_tokens(self, *a, **kw): return None
+    def batch_decode(self, *a, **kw): return ["dummy"]
+    def __call__(self, *a, **kw):
+        class Dummy:
+            def to(self, device): return self
+            input_ids = [[0]]
+        return Dummy()
+
+class DummyModel:
+    config = type('config', (), {'pad_token_id': 0})()
+    def resize_token_embeddings(self, n): return None
+    def to(self, device): return self
+    def eval(self): return self
+    def generate(self, **kwargs): return [[0, 0, 0]]
+
+@pytest.fixture(autouse=True)
+def patch_train_dependencies(monkeypatch):
+    monkeypatch.setattr('train.AutoTokenizer', type('AutoTokenizer', (), {'from_pretrained': staticmethod(lambda *a, **kw: DummyTokenizer())}))
+    monkeypatch.setattr('train.AutoModelForCausalLM', type('AutoModelForCausalLM', (), {'from_pretrained': staticmethod(lambda *a, **kw: DummyModel())}))
+    monkeypatch.setattr('train.du', 'load_task_dataset', lambda *a, **kw: ([{'input': 'x', 'output': 'y'}], [{'input': 'x', 'output': 'y'}]))
+# === END: Dummy classes and autouse fixture ===
+
 # Dummy classes/functions for monkeypatching
 class DummyTB:
     def __init__(self, *a, **kw): pass
