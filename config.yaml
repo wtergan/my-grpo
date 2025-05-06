@@ -1,0 +1,30 @@
+model:
+  model_path: "Qwen/Qwen2.5-3B-Instruct"  # --model_name
+  device: "cuda"  # --device
+  dtype: "bfloat16"  # --fp16 (default now bfloat16)
+  inference: false  # --inference
+
+data:
+  data_path: "gsm8k"  # --task (renamed to data_path)
+
+training:
+  batch_n: 8  # --batch_n (N prompts)
+  gens_m: 4  # --gens_m (answers per prompt)
+  steps: 1000  # --steps
+  lr: 2.0e-5  # --lr
+  warmup: 100  # --warmup
+  eval_every: 200  # --eval_every
+  save_dir: "checkpoints"  # --save_dir
+  seed: 42  # --seed
+  kl_beta: 0.0  # --kl_beta
+  kl_epsilon: 0.2  # --kl_epsilon
+  ref_model_name: null  # --ref_model_name
+
+testing:
+  model_name: "Qwen/Qwen2.5-3B-Instruct"  # --model_name
+  ckpt: null  # --ckpt
+  device: "cuda"  # --device
+  prompts: null  # --prompts
+  task: "gsm8k"  # --task
+  out: null  # --out
+  max_new_tokens: 128  # --max_new_tokens

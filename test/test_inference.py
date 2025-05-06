@@ -3,6 +3,8 @@
 # ===============================================================================
 import subprocess, sys, textwrap
 import pytest
+import yaml
+import os
 
 # ===============================================================================
 # REPL MODE TESTS
@@ -110,3 +112,23 @@ def test_batch_mode_empty_file(tmp_path, monkeypatch):
     )
     # Should not raise
     T.main()
+
+# ===============================================================================
+# CONFIG LOADING TEST
+# ===============================================================================
+# Test: Load config.yaml and assert expected keys and values for the testing section
+def test_inference_config_loading():
+    config_path = os.path.join(os.path.dirname(__file__), '../config.yaml')
+    with open(config_path, 'r') as f:
+        config = yaml.safe_load(f)
+    # Check testing section
+    assert 'testing' in config
+    test_cfg = config['testing']
+    assert test_cfg['model_name'] == "Qwen/Qwen2.5-3B-Instruct"
+    assert test_cfg['device'] == "cuda"
+    assert test_cfg['max_new_tokens'] == 128
+    assert test_cfg['task'] == "gsm8k"
+    # Spot check nullables
+    assert test_cfg['ckpt'] is None
+    assert test_cfg['prompts'] is None
+    assert test_cfg['out'] is None

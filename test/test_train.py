@@ -213,3 +213,28 @@ def test_train_loop_pg_vs_kl(monkeypatch):
         ckpts_kl = list(Path(tmpdir).glob("model_step_2.pt"))
         assert ckpts_kl, "KL checkpoint file not found"
     print("test_train_loop_pg_vs_kl OK")
+
+# ===============================================================================
+# CONFIG LOADING TEST
+# ===============================================================================
+import yaml
+import os
+
+def test_train_config_loading():
+    config_path = os.path.join(os.path.dirname(__file__), '../config.yaml')
+    with open(config_path, 'r') as f:
+        config = yaml.safe_load(f)
+    # Check model section
+    assert 'model' in config
+    assert config['model']['model_path'] == "Qwen/Qwen2.5-3B-Instruct"
+    assert config['model']['dtype'] == "bfloat16"
+    # Check data section
+    assert 'data' in config
+    assert 'data_path' in config['data']
+    # Check training section
+    assert 'training' in config
+    assert type(config['training']['batch_n']) is int
+    assert config['training']['save_dir'] == "checkpoints"
+    # Spot check a few more values
+    assert config['training']['kl_beta'] == 0.0
+    assert config['training']['ref_model_name'] is None

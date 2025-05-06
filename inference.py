@@ -7,24 +7,8 @@ import argparse, json, sys, time, pathlib
 import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM
 import data_utils as du
+import yaml
 
-
-# ===============================================================================
-# ARGUMENT PARSER
-# ===============================================================================
-def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description="GRPO INFERENCE")
-    p.add_argument("--model_name", default="Qwen/Qwen2.5-3B-Instruct")
-    p.add_argument("--ckpt",       default=None, help="Path to the .pt checkpoint")
-    p.add_argument("--device",     default="cuda" if torch.cuda.is_available() else "cpu")
-    p.add_argument("--prompts",    default=None, 
-                   help="Text/JSONL file with one prompt per line. If omitted: REPL mode.")
-    p.add_argument("--task",       default="gsm8k", 
-                   help="Task name to compute reward (if targets available)")
-    p.add_argument("--out",        default=None, 
-                   help="Where to dump JSONL of {prompt,completion,reward}")
-    p.add_argument("--max_new_tokens", type=int, default=128)
-    return p
 
 # ===============================================================================
 # LOADING OF MODEL AND TOKENIZER
@@ -61,12 +45,12 @@ def generate(model, tokenizer, prompt, max_new_tokens, device):
 # ===============================================================================
 # MAIN TESTING ROUTINE
 # ===============================================================================
-def main():
-    args = build_parser().parse_args()
-    model, tokenizer = load_model(args.model_name, args.ckpt, args.device)
+def main(config):
+    test_cfg = config['testing']
+    model, tokenizer = load_model(test_cfg['model_name'], test_cfg['ckpt'], test_cfg['device'])
 
     # REPL MODE: Meaning no prompt file(s) were provided, allow user to input prompts:
-    if args.prompts is None:
+    if test_cfg['prompts'] is None:
         print("Enter prompt(s) (empty line to quit):")
         while True:
             try:
@@ -78,22 +62,22 @@ def main():
                 print("No prompt entered. Exiting.")
                 break
             t0 = time.time()
-            completion = generate(model, tokenizer, prompt, args.max_new_tokens, args.device)
+            completion = generate(model, tokenizer, prompt, test_cfg['max_new_tokens'], test_cfg['device'])
             delta_t = time.time() - t0
             print(f"\n{completion}\n took {delta_t:.2f}seconds\n")
     
     # BATCH MODE: Meaning prompt file(s) were provided, lets process them:
     else:
-        prompts = [line.rstrip("\n") for line in open(args.prompts)]
+        prompts = [line.rstrip("\n") for line in open(test_cfg['prompts'])]
         targets = None
-        if args.targets:
-            targets = [line.rstrip("\n") for line in open(args.targets)]
+        if 'targets' in test_cfg:
+            targets = [line.rstrip("\n") for line in open(test_cfg['targets'])]
             assert len(prompts) == len(targets), "prompts and targets must have the same length."
         
         output_records = []
-        reward_fn = lambda preds, tgts: du.compute_binary_reward(preds, tgts, args.task)
+        reward_fn = lambda preds, tgts: du.compute_binary_reward(preds, tgts, test_cfg['task'])
         for i, prompt in enumerate(prompts):
-            completion = generate(model, tokenizer, prompt, args.max_new_tokens, args.device)
+            completion = generate(model, tokenizer, prompt, test_cfg['max_new_tokens'], test_cfg['device'])
             rec = {"prompt": prompt, "completion": completion}
             if targets:
                 rec["target"] = targets[i]
@@ -101,11 +85,16 @@ def main():
             output_records.append(rec)
             print(f"[{i:>3}] {rec['reward'] if 'reward' in rec else ''}\t{rec['completion'][:80]}")
 
-        if args.out:
-            with open(args.out, "w") as f:
+        if 'out' in test_cfg:
+            with open(test_cfg['out'], "w") as f:
                 for rec in output_records:
                     f.write(json.dumps(rec, ensure_ascii=False) + "\n")
-            print(f"Wrote {len(output_records)} lines to {args.out}")
+            print(f"Wrote {len(output_records)} lines to {test_cfg['out']}")
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--config", type=str, default="config.yaml")
+    args = parser.parse_args()
+    with open(args.config, "r") as f:
+        config = yaml.safe_load(f)
+    main(config)

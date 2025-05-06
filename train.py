@@ -14,6 +14,7 @@ from tqdm.auto import tqdm
 import data_utils as du
 import grpo_core as gc
 import contextlib
+import yaml
 
 # =============================================================================
 # MIXED PRECISION SETUP
@@ -29,32 +30,6 @@ def mixed_precision_env(device_name, dtype="bfloat16"):
         'context': context,
         'device_type': device_type,
     }
-
-# ===============================================================================
-# ARGUMENT PARSER
-# ===============================================================================
-def build_argparser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description="GRPO TRAINER")
-    p.add_argument("--model_name", default="Qwen/Qwen2.5-3B-Instruct")
-    p.add_argument("--task",       default="gsm8k")
-    p.add_argument("--batch_n",    type=int, default=8,   help="N (prompts)")
-    p.add_argument("--gens_m",     type=int, default=4,   help="M (answers per prompt)")
-    p.add_argument("--steps",      type=int, default=1_000)
-    p.add_argument("--lr",         type=float, default=2e-5)
-    p.add_argument("--warmup",     type=int,   default=100)
-    p.add_argument("--eval_every", type=int,   default=200)
-    p.add_argument("--save_dir",   default="checkpoints")
-    p.add_argument("--seed",       type=int,   default=42)
-    p.add_argument("--fp16",       action="store_true")
-    p.add_argument("--device",     default="cuda" if torch.cuda.is_available() else "cpu")
-    p.add_argument("--inference",  action="store_true", help="Use device_map='auto' for inference mode")
-    p.add_argument("--kl_beta", type=float, default=0.0,
-                   help="0 = reference-free; >0 adds KL penalty.")
-    p.add_argument("--kl_epsilon", type=float, default=0.2,
-                   help="KL penalty clipping value.")
-    p.add_argument("--ref_model_name", default=None,
-                   help="HF name/path for frozen reference (defaults to model_name)")
-    return p
 
 # ===============================================================================
 # SEED SETUP
@@ -88,68 +63,68 @@ def evaluation(model, tokenizer, val_prompts, val_targets, reward_fn,
 # ===============================================================================
 # MAIN TRAINING LOOP
 # ===============================================================================
-def main():
-    args = build_argparser().parse_args()
-    seed_setup(args.seed)
-    Path(args.save_dir).mkdir(exist_ok=True, parents=True)
+def main(config):
+    seed_setup(config['training']['random_seed'])
+    Path(config['training']['ckpt_dir']).mkdir(exist_ok=True, parents=True)
 
     # Model and token initialization:
     model_kwargs = {
-        "torch_dtype": torch.float16 if args.fp16 else torch.float32,
+        "torch_dtype": torch.bfloat16 if config['model']['dtype'] == 'bfloat16' else torch.float16 \
+            if config['model']['dtype'] == 'float16' else torch.float32,
     }
-    if args.inference and args.device.startswith("cuda"):
+    if config['model'].get('inference', False) and config['model']['device'].startswith("cuda"):
         model_kwargs["device_map"] = "auto"
     model = AutoModelForCausalLM.from_pretrained(
-        args.model_name,
+        config['model']['model_path'],
         **model_kwargs
     )
-    tokenizer = AutoTokenizer.from_pretrained(args.model_name)
+    tokenizer = AutoTokenizer.from_pretrained(config['model']['model_path'])
     if tokenizer.pad_token is None:
         tokenizer.add_special_tokens({'pad_token': '[PAD]'})
     if tokenizer.pad_token_id != model.config.pad_token_id:
         model.resize_token_embeddings(len(tokenizer))
-    model.to(args.device).train()
+    model.to(config['model']['device']).train()
 
     # Set up mixed precision context:
-    env = mixed_precision_env(args.device, dtype="bfloat16" if not args.fp16 else "float16")
+    env = mixed_precision_env(config['model']['device'], dtype=config['model']['dtype'])
     context = env['context']
 
     # GradScaler for mixed-precision (only CUDA):
-    scaler = torch.amp.GradScaler(device=args.device) if args.device.startswith('cuda') else None
+    scaler = torch.amp.GradScaler(device=config['model']['device']) if config['model']['device'].startswith('cuda') else None
 
     # Load reference model if KL is enabled:
     ref_model = None
-    if args.kl_beta > 0:
+    if config['training'].get('kl_beta', 0) > 0:
         ref_model = AutoModelForCausalLM.from_pretrained(
-            args.ref_model_name or args.model_name,
-            torch_dtype=torch.float16 if args.fp16 else torch.float32,
-            device_map="auto" if args.device.startswith("cuda") else None
+            config['training'].get('ref_model_name', config['model']['model_path']),
+            torch_dtype=torch.bfloat16 if config['model']['dtype'] == 'bfloat16' else torch.float16 if config['model']['dtype'] == 'float16' else torch.float32,
+            device_map="auto" if config['model']['device'].startswith("cuda") else None
         )
-        ref_model.to(args.device).eval()
+        ref_model.to(config['model']['device']).eval()
         for p in ref_model.parameters():
             p.requires_grad = False
 
     # Dataset loading:
-    train_ds, val_ds = du.load_task_dataset(args.task)
-    train_prompts = du.build_prompts(train_ds, args.task)
-    val_prompts = du.build_prompts(val_ds, args.task)
-    train_targets = du.target_extraction(train_ds, args.task)
-    val_targets = du.target_extraction(val_ds, args.task)
-    reward_fn = lambda preds, tgts: du.compute_binary_reward(preds, tgts, args.task)
+    train_ds, val_ds = du.load_task_dataset(config['data']['data_path'])
+    train_prompts = du.build_prompts(train_ds, config['data']['data_path'])
+    val_prompts = du.build_prompts(val_ds, config['data']['data_path'])
+    train_targets = du.target_extraction(train_ds, config['data']['data_path'])
+    val_targets = du.target_extraction(val_ds, config['data']['data_path'])
+    reward_fn = lambda preds, tgts: du.compute_binary_reward(preds, tgts, config['data']['data_path'])
 
     # Optimizer:
-    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, betas=(0.9, 0.999))
+    optimizer = torch.optim.AdamW(model.parameters(), lr=config['training']['learning_rate'], betas=tuple(config['training']['betas']))
     scheduler = get_cosine_schedule_with_warmup(
-        optimizer, num_warmup_steps=args.warmup, num_training_steps=args.steps)
+        optimizer, num_warmup_steps=config['training'].get('warmup', 100), num_training_steps=config['training']['max_gen_len'])
     
     # Logging setup:
-    t_board = SummaryWriter(log_dir=f"runs/{time.strftime('%Y%m%d-%H%M%S')}")
-    step_bar = tqdm(range(1, args.steps + 1), desc="train-step")
+    t_board = SummaryWriter(log_dir=config['training']['log_dir'])
+    step_bar = tqdm(range(1, config['training']['max_gen_len'] + 1), desc="train-step")
 
     # Training Loop:
     for step in step_bar:
         # Sampling N prompts:
-        idx = random.sample(range(len(train_prompts)), args.batch_n)
+        idx = random.sample(range(len(train_prompts)), config['training']['batch_size'])
         prompts = [train_prompts[i] for i in idx]
         targets = [train_targets[i] for i in idx]
 
@@ -157,12 +132,12 @@ def main():
         with context:
             loss, diag = gc.grpo_step(
                 model, tokenizer, prompts, targets, reward_fn,
-                num_generations=args.gens_m,
-                max_new_tokens=64,
-                device=args.device,
+                num_generations=config['training']['num_questions_per_batch'],
+                max_new_tokens=config['training']['max_gen_len'],
+                device=config['model']['device'],
                 ref_model=ref_model,
-                kl_beta=args.kl_beta,
-                kl_epsilon=getattr(args, 'kl_epsilon', 0.2),
+                kl_beta=config['training'].get('kl_beta', 0.0),
+                kl_epsilon=config['training'].get('kl_epsilon', 0.2),
             )
 
         # Back-propagation:
@@ -170,12 +145,12 @@ def main():
         if scaler is not None:
             scaler.scale(loss).backward()
             scaler.unscale_(optimizer)
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), config['training']['max_grad_norm'])
             scaler.step(optimizer)
             scaler.update()
         else:
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), config['training']['max_grad_norm'])
             optimizer.step()
         scheduler.step()
         
@@ -183,22 +158,24 @@ def main():
         step_bar.set_postfix(loss=float(loss), reward=diag["raw_reward_mean"])
         t_board.add_scalar("train/loss", float(loss), step)
         t_board.add_scalar("train/r_mean", diag["raw_reward_mean"], step)
-        t_board.add_scalar("train/kl_beta", args.kl_beta, step)
+        t_board.add_scalar("train/kl_beta", config['training'].get('kl_beta', 0.0), step)
 
         # Evaluation and checkpointing:
-        if step % args.eval_every == 0 or step == args.steps:
+        if step % config['training']['eval_interval'] == 0 or step == config['training']['max_gen_len']:
             with context:
                 acc = evaluation(model, tokenizer, val_prompts, val_targets, reward_fn, 
-                              args.gens_m, 64, args.device)
+                              config['training']['num_questions_per_batch'], 64, config['model']['device'])
             t_board.add_scalar("val/accuracy", acc, step)
-            torch.save(model.state_dict(), f"{args.save_dir}/model_step_{step}.pt")
+            torch.save(model.state_dict(), f"{config['training']['ckpt_dir']}/model_step_{step}.pt")
             model.train()
         
     # Close logging:
     t_board.close()
-    
-# ===============================================================================
-# SCRIPT ENTRY POINT
-# ===============================================================================
+
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--config", type=str, default="config.yaml")
+    args = parser.parse_args()
+    with open(args.config, "r") as f:
+        config = yaml.safe_load(f)
+    main(config)
