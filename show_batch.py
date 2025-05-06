@@ -7,6 +7,8 @@ def show_batch():
     model_name = "Qwen/Qwen2.5-3B-Instruct"
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     model = AutoModelForCausalLM.from_pretrained(model_name)
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    model.to(device)
     model.eval()
 
     # Example prompts
@@ -19,7 +21,7 @@ def show_batch():
         prompts,
         num_generations=2,
         max_new_tokens=4,
-        device="cuda" if torch.cuda.is_available() else "cpu"
+        device=device
     )
 
     # Show anatomy of the batch
