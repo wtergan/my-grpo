@@ -96,7 +96,7 @@ def group_rewards_normalization(
     """
     if rewards.ndim != 1:
         rewards = rewards.flatten()
-    assert rewards.numel() % group_size == 0, "rewards length not divisible by group_size"
+    assert rewards.numel() % group_size == 0, "rewards length should be divisible by group_size"
     n_prompts = rewards.numel() // group_size
     rewards = rewards.view(n_prompts, group_size)
     means = rewards.mean(dim=1, keepdim=True)

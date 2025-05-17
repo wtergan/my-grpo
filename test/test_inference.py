@@ -1,172 +1,166 @@
-# ===============================================================================
-# IMPORTS AND SETUP
-# ===============================================================================
+import sys
+from pathlib import Path
+sys.path.append(str(Path(__file__).parent.parent))
+
 import os
 import yaml
-import inference as T
 import pytest
+import json # For checking output file content
 
-# Helper to load config for tests
-def load_config():
-    config_path = os.path.join(os.path.dirname(__file__), '../config.yaml')
-    with open(config_path, 'r') as f:
+# Import the module to test, aliased as T for brevity from original
+import inference as T 
+# Dummies will come from conftest.py
+
+CONFIG_PATH = os.path.join(os.path.dirname(__file__), '../config.yaml')
+
+def load_test_config():
+    with open(CONFIG_PATH, 'r') as f:
         config = yaml.safe_load(f)
-    return config
-
-class DummyTokenizer:
-    def __init__(self):
-        self.pad_token_id = 0
-        self.pad_token = '[PAD]'
-        self.eos_token_id = 0
-    def add_special_tokens(self, *a, **kw): return None
-    def batch_decode(self, *a, **kw): return ["dummy"]
-    def __call__(self, *a, **kw):
-        class Dummy:
-            def to(self, device): return self
-            input_ids = [[0]]
-        return Dummy()
-
-class DummyModel:
-    config = type('config', (), {'pad_token_id': 0})()
-    def resize_token_embeddings(self, n): return None
-    def to(self, device): return self
-    def eval(self): return self
-    def generate(self, **kwargs): return [[0, 0, 0]]
-    def __call__(self, *args, **kwargs):
-        import torch
-        class Dummy:
-            def to(self, device): return self
-        return Dummy()
-    def parameters(self):
-        return []
+    # Deepcopy or carefully modify for tests to avoid state leakage if needed
+    # For these tests, direct modification of a loaded dict slice is fine.
+    return config['testing'], config['model'], config['data']
 
 @pytest.fixture(autouse=True)
-def patch_inference_dependencies(monkeypatch):
-    import inference as inf
-    if not hasattr(inf, 'AutoTokenizer'):
-        monkeypatch.setattr(inf, 'AutoTokenizer', type('AutoTokenizer', (), {'from_pretrained': staticmethod(lambda *a, **kw: DummyTokenizer())}))
-    if not hasattr(inf, 'AutoModelForCausalLM'):
-        monkeypatch.setattr(inf, 'AutoModelForCausalLM', type('AutoModelForCausalLM', (), {'from_pretrained': staticmethod(lambda *a, **kw: DummyModel())}))
+def patch_inference_hf_dependencies(monkeypatch, request):
+    # Patch AutoTokenizer and AutoModelForCausalLM where inference.py imports them
+    FakeAutoTokenizer = request.getfixturevalue('FakeAutoTokenizer')
+    FakeAutoModel = request.getfixturevalue('FakeAutoModel')
+    
+    monkeypatch.setattr(T, 'AutoTokenizer', FakeAutoTokenizer)
+    monkeypatch.setattr(T, 'AutoModelForCausalLM', FakeAutoModel)
 
 # ===============================================================================
 # REPL MODE TESTS
 # ===============================================================================
-# Test 1: REPL starts and exits gracefully on Enter (already provided by user)
-# Test 2: REPL exits gracefully on Ctrl+C (KeyboardInterrupt)
 def test_repl_keyboard_interrupt(monkeypatch):
-    config = load_config()
-    test_cfg = config['testing']
-    model_cfg = config['model']
-    data_cfg = config['data']
-    def fake_input(prompt):
+    test_cfg, model_cfg, data_cfg = load_test_config()
+    model_cfg['device'] = 'cpu' # Ensure CPU for test environment
+    test_cfg['prompts'] = None # Ensure REPL mode
+
+    def fake_input(prompt_text): # prompt_text is the "Prompt: " string
         raise KeyboardInterrupt()
     monkeypatch.setattr('builtins.input', fake_input)
-    monkeypatch.setattr(T, 'load_model', lambda *a, **kw: (None, None))
+    
     with pytest.raises(SystemExit) as e:
         T.main(test_cfg, model_cfg, data_cfg)
     assert e.value.code == 0
 
-# Test 3: REPL exits gracefully on Ctrl+D (EOFError)
+
 def test_repl_eof_error(monkeypatch):
-    config = load_config()
-    test_cfg = config['testing']
-    model_cfg = config['model']
-    data_cfg = config['data']
-    def fake_input(prompt):
+    test_cfg, model_cfg, data_cfg = load_test_config()
+    model_cfg['device'] = 'cpu'
+    test_cfg['prompts'] = None 
+
+    def fake_input(prompt_text):
         raise EOFError()
     monkeypatch.setattr('builtins.input', fake_input)
-    monkeypatch.setattr(T, 'load_model', lambda *a, **kw: (None, None))
+
     with pytest.raises(SystemExit) as e:
         T.main(test_cfg, model_cfg, data_cfg)
     assert e.value.code == 0
 
-# Test 4: REPL generates a completion for a single prompt and exits
-def test_repl_single_prompt(monkeypatch):
-    config = load_config()
-    test_cfg = config['testing']
-    model_cfg = config['model']
-    data_cfg = config['data']
-    prompts = iter(["What is 2+2?", ""])
-    monkeypatch.setattr('builtins.input', lambda _: next(prompts))
-    generated_outputs = []
-    def mock_generate(*args, **kwargs):
-        generated_outputs.append("mocked_output_for_first_prompt")
-        return "mocked_output_for_first_prompt"
 
-    monkeypatch.setattr(T, 'generate', mock_generate) 
-    monkeypatch.setattr(T, 'load_model', lambda *a, **kw: (None, None))
-    with pytest.raises(SystemExit) as e: 
+def test_repl_single_prompt_then_empty_exit(monkeypatch, capsys):
+    test_cfg, model_cfg, data_cfg = load_test_config()
+    model_cfg['device'] = 'cpu'
+    test_cfg['prompts'] = None
+    test_cfg['out'] = None # Print to stdout for REPL
+
+    user_inputs = iter(["What is 2+2?", ""]) # First prompt, then empty to exit
+    monkeypatch.setattr('builtins.input', lambda _: next(user_inputs))
+    
+    # No SystemExit expected if loop finishes due to empty input after first.
+    # The script sys.exit(0) if prompt is empty.
+    with pytest.raises(SystemExit) as e:
         T.main(test_cfg, model_cfg, data_cfg)
     assert e.value.code == 0
-    assert len(generated_outputs) == 1
+    
+    captured = capsys.readouterr()
+    # Dummy model generate will produce something based on DummyTokenizer.batch_decode
+    # Check if JSON-like output for the first prompt was printed
+    assert '"prompt": "What is 2+2?"' in captured.out
+    assert '"completion":' in captured.out # Actual completion text depends on DummyModel
+
 
 # ===============================================================================
 # BATCH MODE TESTS
 # ===============================================================================
-# Test 5: Batch mode with file (minimal smoke test)
-def test_batch_mode(tmp_path, monkeypatch):
-    config = load_config()
-    test_cfg = config['testing']
-    model_cfg = config['model']
-    data_cfg = config['data']
+def test_batch_mode_with_file(tmp_path, monkeypatch):
+    test_cfg, model_cfg, data_cfg = load_test_config()
+    model_cfg['device'] = 'cpu'
+
+    prompts_content = "What is 2+2?\nWhat is the capital of France?\n"
     prompts_file = tmp_path / "prompts.txt"
-    prompts_file.write_text("What is 2+2?\nWhat is the capital of France?\n")
-    output_file = tmp_path / "output.jsonl"
-    monkeypatch.setattr(T, 'generate', lambda *a, **kw: "dummy")
-    monkeypatch.setattr(T, 'load_model', lambda *a, **kw: (None, None))
-    test_cfg['prompts'] = str(prompts_file)
-    test_cfg['out'] = str(output_file)
-    test_cfg['max_new_tokens'] = 32
-    T.main(test_cfg, model_cfg, data_cfg)
-    assert output_file.exists()
+    prompts_file.write_text(prompts_content)
+    
+    output_file = tmp_path / "output.jsonl" # Original used .jsonl, main script uses .json
 
-# Test: Batch mode with missing prompts file (should not raise an exception)
-def test_batch_mode_missing_file(tmp_path, monkeypatch):
-    config = load_config()
-    test_cfg = config['testing']
-    model_cfg = config['model']
-    data_cfg = config['data']
-    prompts_file = tmp_path / "does_not_exist.txt"
-    output_file = tmp_path / "output.jsonl"
-    monkeypatch.setattr(T, 'generate', lambda *a, **kw: "dummy")
-    monkeypatch.setattr(T, 'load_model', lambda *a, **kw: (None, None))
     test_cfg['prompts'] = str(prompts_file)
     test_cfg['out'] = str(output_file)
-    test_cfg['max_new_tokens'] = 32
-    T.main(test_cfg, model_cfg, data_cfg)
-    assert not output_file.exists()
+    test_cfg['max_new_tokens'] = 32 # As in original test
 
-# Test: Batch mode with empty prompts file (should not crash)
-def test_batch_mode_empty_file(tmp_path, monkeypatch):
-    config = load_config()
-    test_cfg = config['testing']
-    model_cfg = config['model']
-    data_cfg = config['data']
-    prompts_file = tmp_path / "empty.txt"
-    prompts_file.write_text("")
+    T.main(test_cfg, model_cfg, data_cfg)
+    
+    assert output_file.exists()
+    with open(output_file, 'r') as f:
+        results = json.load(f)
+    assert len(results) == 2
+    assert results[0]['prompt'] == "What is 2+2?"
+    assert 'completion' in results[0]
+
+
+def test_batch_mode_missing_prompts_file(tmp_path, monkeypatch, capsys):
+    test_cfg, model_cfg, data_cfg = load_test_config()
+    model_cfg['device'] = 'cpu'
+
+    prompts_file = tmp_path / "does_not_exist.txt" # File does not exist
     output_file = tmp_path / "output.jsonl"
-    monkeypatch.setattr(T, 'generate', lambda *a, **kw: "dummy")
-    monkeypatch.setattr(T, 'load_model', lambda *a, **kw: (None, None))
+
     test_cfg['prompts'] = str(prompts_file)
     test_cfg['out'] = str(output_file)
-    test_cfg['max_new_tokens'] = 32
+
+    T.main(test_cfg, model_cfg, data_cfg) # Should not crash, should print error
+    
+    captured = capsys.readouterr()
+    assert f"Error: Prompts file not found: {prompts_file}" in captured.out
+    assert not output_file.exists() # As per logic in main, if prompts_file not found, it returns.
+
+
+def test_batch_mode_empty_prompts_file(tmp_path, monkeypatch):
+    test_cfg, model_cfg, data_cfg = load_test_config()
+    model_cfg['device'] = 'cpu'
+
+    prompts_file = tmp_path / "empty_prompts.txt"
+    prompts_file.write_text("") # Empty file
+    
+    output_file = tmp_path / "output.jsonl"
+
+    test_cfg['prompts'] = str(prompts_file)
+    test_cfg['out'] = str(output_file)
+
     T.main(test_cfg, model_cfg, data_cfg)
+    
+    # Logic: if prompts list is empty, and out_file is specified, it writes an empty list.
     assert output_file.exists()
+    with open(output_file, 'r') as f:
+        content = f.read()
+        assert json.loads(content) == []
+
 
 # ===============================================================================
-# CONFIG LOADING TEST
+# CONFIG LOADING TEST (Basic check, not a test of T.main)
 # ===============================================================================
-# Test: Load config.yaml and assert expected keys and values for the testing section
-def test_inference_config_loading():
-    config = load_config()
-    # Check testing section
-    assert 'testing' in config
-    test_cfg = config['testing']
-    assert test_cfg['model_name'] == "Qwen/Qwen2.5-3B-Instruct"
-    assert test_cfg['device'] == "cuda"
+def test_inference_config_values_from_file():
+    test_cfg, model_cfg, data_cfg = load_test_config() # Uses the helper
+    
+    # Check some specific values from config.yaml's 'testing' section
+    assert test_cfg['model_name'] == "Qwen/Qwen2.5-3B-Instruct" # From default config
+    assert test_cfg['device'] == "cuda" # Default from config
     assert test_cfg['max_new_tokens'] == 128
     assert test_cfg['task'] == "gsm8k"
-    # Spot check nullables
-    assert test_cfg['ckpt'] is None
+    assert test_cfg['ckpt'] is None 
     assert test_cfg['prompts'] is None
     assert test_cfg['out'] is None
+
+if __name__ == "__main__":
+    pytest.main([__file__])
